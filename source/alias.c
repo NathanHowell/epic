@@ -1,4 +1,4 @@
-/* $EPIC: alias.c,v 1.11.2.5 2003/02/27 15:29:55 wd Exp $ */
+/* $EPIC: alias.c,v 1.11.2.6 2003/02/27 18:15:57 wd Exp $ */
 /*
  * alias.c -- Handles the whole kit and caboodle for aliases.
  *
@@ -864,7 +864,7 @@ static namespace_t *extract_namespace(char **name) {
     /* Otherwise, we need to set 'name' correctly, then decide if we have a
      * namespace or just a 'local' specifier. */
     *name = s + 1;
-    if (s == (start - 1))
+    if (s == start)
 	/* this means the string is of the form ':name'.  It's local */
 	return LOCAL_NAMESPACE;
 
@@ -890,13 +890,13 @@ Alias *make_new_Alias (char *name)
 	/* We do some evil voodoo here to locate the name at the end of the
 	 * alias structure for hashing it.  Ulch. :) */
 	Alias *tmp = (Alias *) new_malloc(sizeof(Alias) + len + 1);
+	memset(tmp, 0, sizeof(Alias));
 	tmp->name = (char *)tmp + sizeof(Alias);
 	strcpy(tmp->name, name);
 	tmp->nspace = namespaces.current;
 	tmp->stuff = tmp->stub = NULL;
 	tmp->line = current_line();
 	tmp->filename = m_strdup(current_package());
-	tmp->arglist = NULL;
 	alias_total_bytes_allocated += sizeof(Alias) + strlen(name) +
 				strlen(tmp->filename);
 	return tmp;
@@ -1021,7 +1021,7 @@ void	add_local_var	(char *name, char *stuff, int noisy)
 	 * If it doesnt, then we add it to the current frame,
 	 * where it will be reaped later.
 	 */
-	if (!(tmp = find_local_var(name, &rtsp))) {
+	if ((tmp = find_local_var(name, &rtsp)) == NULL) {
 		tmp = make_new_Alias(name);
 		hash_insert(rtsp->vtable, tmp);
 		LIST_INSERT_HEAD(&rtsp->vlist, tmp, lp);
@@ -1055,9 +1055,10 @@ void	add_cmd_alias	(char *name, ArgList *arglist, char *stuff, int stub)
 	save = name = remove_brackets(name, NULL, &af);
 
 	if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE) {
-		yell("aliases cannot be local!");
-		new_free(&save);
-		return;
+		/* XXX: Self-serving hack.  I use aliases which begin with
+		 * ':'.  I can make them work without too much trouble. :) */
+		name = save;
+		nsp = namespaces.root;
 	} else if (nsp == NULL) {
 		yell("Unknown/invalid namespace in %s", save);
 		new_free(&save);
@@ -1155,9 +1156,10 @@ static Alias *	find_cmd_alias (char *name)
 	char *save = name;
 	namespace_t *nsp;
 
-	if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE ||
-		nsp == NULL)
-	    /* local namespaces are not supproted for aliases/functions */
+	if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE) {
+	    name = save;
+	    nsp = namespaces.root;
+	} else if (nsp == NULL)
 	    return NULL;
 
 	if ((item = hash_find(nsp->ftable, name)) == NULL)
@@ -1257,6 +1259,7 @@ static Alias *	find_local_var (char *name, RuntimeStack **frame)
 			    if (hash_find(call_stack[c].vtable, name ) !=
 				    NULL) {
 				/* implicit creation.. */
+				*s = save;
 				alias = make_new_Alias(name);
 				hash_insert(call_stack[c].vtable, alias);
 				LIST_INSERT_HEAD(&call_stack[c].vlist,
@@ -1335,8 +1338,8 @@ void	delete_cmd_alias (char *name, int noisy)
 	char *save = name;
 
 	if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE) {
-		yell("Trying to delete local variables in the wrong place!");
-		return;
+		name = save;
+		nsp = namespaces.root;
 	} else if (nsp == NULL) {
 		yell("Unknown/invalid namespace in %s", save);
 		return;
@@ -1430,8 +1433,10 @@ void	list_cmd_alias (char *name)
 	char *save = name;
 
 	if (name != NULL) {
-	    if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE ||
-		    nsp == NULL) {
+	    if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE) {
+		name = save;
+		nsp = namespaces.root;
+	    } else if (nsp == NULL) {
 		say("Unknown/invalid namespace in %s", save);
 		return;
 	    }
@@ -1543,7 +1548,7 @@ char *	get_cmd_alias (char *name, int *howmany, char **complete_name, void **arg
 	Alias *item;
 
 	if ((item = find_cmd_alias(name)) != NULL) {
-		*howmany = 1;
+		*howmany = -1;
 		if (complete_name)
 			malloc_strcpy(complete_name, item->name);
 		if (args)
@@ -1855,15 +1860,24 @@ void 	save_aliases (FILE *fp, int do_all)
 
 static
 void 	destroy_aliases (hashtable_t *table, struct alias_list *list) {
-	Alias *ap;
+	Alias *ap, *last = NULL;
 
+	LIST_FOREACH(ap, list, lp) {
+	    if (ap == last)
+		error("Ugh! ap == last (%s)", ap->name);
+	    else if (hash_find(table, ap->name) != ap)
+		error("Ugh! finding %s didn't return ap!");
+	    last = ap;
+	}
+	last = NULL;
 	while ((ap = LIST_FIRST(list)) != NULL) {
+	    last = ap;
 	    hash_delete(table, ap);
 	    LIST_REMOVE(ap, lp);
 	    new_free(&ap->stuff);
 	    new_free(&ap->stub);
 	    new_free(&ap->filename);
-	    new_free(&ap);
+	    new_free((char **)&ap);
 	}
 }
 
@@ -1885,6 +1899,7 @@ void 	make_local_stack 	(const char *name)
 		RESIZE(call_stack, RuntimeStack, max_wind);
 		for (; wind_index < max_wind; wind_index++) {
 			call_stack[wind_index].vtable = NULL;
+			LIST_INIT(&call_stack[wind_index].vlist);
 			call_stack[wind_index].current = NULL;
 			call_stack[wind_index].name = NULL;
 			call_stack[wind_index].parent = -1;
@@ -1903,10 +1918,10 @@ void 	make_local_stack 	(const char *name)
 		call_stack[wind_index].name = empty_string;
 		call_stack[wind_index].parent = wind_index - 1;
 	}
-	call_stack[wind_index].vtable = create_hash_table(4,
-		sizeof(Alias), NAMESPACE_HASH_SANITYLEN,
-		HASH_FL_NOCASE | HASH_FL_STRING, strcasecmp);
-	LIST_INIT(&call_stack[wind_index].vlist);
+	if (call_stack[wind_index].vtable == NULL)
+	    call_stack[wind_index].vtable = create_hash_table(4,
+		    sizeof(Alias), NAMESPACE_HASH_SANITYLEN,
+		    HASH_FL_NOCASE | HASH_FL_STRING, strcasecmp);
 	call_stack[wind_index].locked = 0;
 }
 
@@ -1931,13 +1946,9 @@ void 	destroy_local_stack 	(void)
 	/*
 	 * We clean up as best we can here...
 	 */
-	if (call_stack[wind_index].vtable != NULL) {
+	if (!LIST_EMPTY(&call_stack[wind_index].vlist))
 	    destroy_aliases(call_stack[wind_index].vtable,
 		    &call_stack[wind_index].vlist);
-	    destroy_hash_table(call_stack[wind_index].vtable);
-	    call_stack[wind_index].vtable = NULL;
-	    LIST_INIT(&call_stack[wind_index].vlist);
-	}
 	if (call_stack[wind_index].current)
 		call_stack[wind_index].current = 0;
 	if (call_stack[wind_index].name)

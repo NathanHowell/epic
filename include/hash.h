@@ -2,9 +2,9 @@
  * hash.h: hash table structures and prototypes
  * 
  * Copyright 2002 the Ithildin Project.
- * See the COPYING file for more information on licensing and use.
+ * See the COPYRIGHT file for more information on licensing and use.
  * 
- * $Id: hash.h,v 1.1.2.1 2003/02/27 12:17:23 wd Exp $
+ * $Id: hash.h,v 1.1.2.2 2003/02/27 18:15:57 wd Exp $
  */
 
 #ifndef HASH_H

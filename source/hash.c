@@ -2,7 +2,7 @@
  * hash.c: hash table support functions
  * 
  * Copyright 2002 the Ithildin Project.
- * See the COPYING file for more information on licensing and use.
+ * See the COPYRIGHT file for more information on licensing and use.
  * 
  * This system implements a generic hash-table systeem.  The workings of
  * hash-tables are discussed in almost any simple C algorithm book, so I won't
