@@ -1,4 +1,4 @@
-/* $EPIC: alias.c,v 1.11.2.4 2003/02/27 15:14:18 wd Exp $ */
+/* $EPIC: alias.c,v 1.11.2.5 2003/02/27 15:29:55 wd Exp $ */
 /*
  * alias.c -- Handles the whole kit and caboodle for aliases.
  *
@@ -36,7 +36,6 @@
 /* Almost totaly rewritten by Jeremy Nelson (01/97) */
 
 #include "irc.h"
-#include "array.h"
 #include "commands.h"
 #include "files.h"
 #include "hash.h"
@@ -52,6 +51,7 @@
 #include "vars.h"
 #include "window.h"
 #include "keys.h"
+#include "functions.h"
 
 #define LEFT_BRACE '{'
 #define RIGHT_BRACE '}'
@@ -156,10 +156,18 @@ static  char *after_expando (char *start, int lvalue, int *call)
 static unsigned long 	alias_total_allocated = 0;
 static unsigned long 	alias_total_bytes_allocated = 0;
 
+enum ARG_TYPES {
+	WORD,
+	UWORD,
+	DWORD
+};
+
 /* Ugh. XXX Bag on the side */
 struct ArgListT {
 	char *	vars[32];
 	char *	defaults[32];
+	int	words[32];
+	enum	ARG_TYPES types[32];
 	int	void_flag;
 	int	dot_flag;
 };
@@ -707,6 +715,7 @@ ArgList	*parse_arglist (char *arglist)
 		next_in_comma_list(this_term, &next_term);
 		if (!(varname = next_arg(this_term, &this_term)))
 			continue;
+		args->types[arg_count] = WORD;
 		if (!my_stricmp(varname, "void")) {
 			args->void_flag = 1;
 			break;
@@ -716,14 +725,35 @@ ArgList	*parse_arglist (char *arglist)
 		} else {
 			args->vars[arg_count] = m_strdup(varname);
 			args->defaults[arg_count] = NULL;
+			args->words[arg_count] = 1;
 
-			if (!(modifier = next_arg(this_term, &this_term)))
-				continue;
-			if (!my_stricmp(modifier, "default"))
+			while ((modifier = next_arg(this_term, &this_term)))
 			{
-			    if (!(value = new_next_arg(this_term, &this_term)))
-				continue;
-			    args->defaults[arg_count] = m_strdup(value);
+				if (!(value = new_next_arg(this_term, &this_term)))
+						break;
+				if (!my_stricmp(modifier, "default"))
+				{
+					args->defaults[arg_count] = m_strdup(value);
+				}
+				else if (!my_stricmp(modifier, "words"))
+				{
+					args->types[arg_count] = WORD;
+					args->words[arg_count] = atol(value);
+				}
+				else if (!my_stricmp(modifier, "uwords"))
+				{
+					args->types[arg_count] = UWORD;
+					args->words[arg_count] = atol(value);
+				}
+				else if (!my_stricmp(modifier, "dwords"))
+				{
+					args->types[arg_count] = DWORD;
+					args->words[arg_count] = atol(value);
+				}
+				else
+				{
+					yell("Bad modifier %s", modifier);
+				}
 			}
 		}
 	}
@@ -748,6 +778,8 @@ void	destroy_arglist (ArgList *arglist)
 	new_free((char **)&arglist);
 }
 
+#define ew_next_arg(a,b,c,d) ((d) ? new_next_arg_count((a),(b),(c)) : next_arg_count((a),(b),(c)))
+
 void	prepare_alias_call (void *al, char **stuff)
 {
 	ArgList *args = (ArgList *)al;
@@ -760,7 +792,20 @@ void	prepare_alias_call (void *al, char **stuff)
 	{
 		char	*next_val;
 		char	*expanded = NULL;
-		int	af;
+		int	af, type = 0;
+
+		switch (args->types[i])
+		{
+			case WORD:
+				type = (x_debug & DEBUG_EXTRACTW);
+				break;
+			case UWORD:
+				type = 0;
+				break;
+			case DWORD:
+				type = 1;
+				break;
+		}
 
 		/* Last argument on the list and no ... argument? */
 		if (!args->vars[i + 1] && !args->dot_flag && !args->void_flag)
@@ -771,7 +816,9 @@ void	prepare_alias_call (void *al, char **stuff)
 
 		/* Yank the next word from the arglist */
 		else
-			next_val = next_arg(*stuff, stuff);
+		{
+			next_val = ew_next_arg(*stuff, stuff, args->words[i], type);
+		}
 
 		if (!next_val || !*next_val)
 		{
@@ -791,6 +838,8 @@ void	prepare_alias_call (void *al, char **stuff)
 	if (args->void_flag)
 		*stuff = empty_string;
 }
+
+#undef ew_next_arg
 
 /**************************** INTERMEDIATE INTERFACE *********************/
 static	namespace_t *extract_namespace(char **name);
@@ -1031,6 +1080,7 @@ void	add_cmd_alias	(char *name, ArgList *arglist, char *stuff, int stub)
 		new_free(&tmp->stub);
 	}
 	tmp->global = loading_global;
+	destroy_arglist(tmp->arglist);
 	tmp->arglist = arglist;
 
 	alias_total_allocated++;
@@ -1966,6 +2016,7 @@ void 	destroy_call_stack 	(void)
 
 
 /****************************** ALIASCTL ************************************/
+#if 0
 #define EMPTY empty_string
 #define RETURN_EMPTY return m_strdup(EMPTY)
 #define RETURN_IF_EMPTY(x) if (empty( x )) RETURN_EMPTY
@@ -1974,6 +2025,7 @@ void 	destroy_call_stack 	(void)
 #define GET_STR_ARG(x, y) {RETURN_IF_EMPTY(y); x = new_next_arg(y, &y);RETURN_IF_EMPTY(x);}
 #define RETURN_STR(x) return m_strdup((x) ? (x) : EMPTY)
 #define RETURN_INT(x) return m_strdup(ltoa((x)))
+#endif
 
 /* Used by function_aliasctl */
 /* MUST BE FIXED */

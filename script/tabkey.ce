@@ -5,7 +5,8 @@
 # to do the actual completion.  The function will receive a single word as
 # its argument, and return a list of potential matches.  The word is whatever
 # is under the cursor, up to the insertion point at the current time.  The
-# word may be empty and the function should be able to cope with this.
+# word may be empty or contain spaces and the function should be able to
+# cope with this.
 #
 # The exact function chosen works like this:
 # * If the current _word_ is a command (first word, begins with $cmdchars),
@@ -44,16 +45,20 @@
 #   prefix followed by the name of the command that they are used to
 #   complete.  This is where tabkey.cmd will look for them.
 # * Generally, completion "methods" should be placed under tabkey.method
-#   and shouldn't rely on the exported variables being available, as user
-#   supplied functions may forget to re-export them.  Context sensitive
-#   functions should be as simple as possible.
+#   Context sensitive functions should be as simple as possible and the bulk
+#   of the work should be done by the methods.
+#
+# NOTE:  The "first argument" description above is no longer true.  The
+#        functions argument list is to be treated as a single argument.
 #
 
 package tabkey.ce
-bind ^i parse_command tabkey
+bind ^i parse_command tabkey.main
 alias tabkey.default tabkey.method.nickchan
 
-alias tabkey {
+alias tabkey.main {
+	@ :oxd = xdebug(extractw)
+	xdebug extractw
 	@ :curword = indextoword($curpos() $L )
 	@ :wordind = wordtoindex($curword $L)
 	if (32 >= (127 & ascii($mid(${curpos()-1} 1 $L )))) {
@@ -61,9 +66,14 @@ alias tabkey {
 		@ wordind = curpos()
 	}
 	@ :word = mid($wordind ${curpos()-wordind} $L)
-	@ :matches = []
+	if (word=~["*"]) {
+		@ :word = shift(word)
+	} elsif (word=~["*]) {
+		@ :word#=["]
+		@ :word = shift(word)
+	}
 	if (!index($cmdchars $L)) {
-		wait for @ matches = tabkey.cmd($word)
+		wait for @ :matches = tabkey.cmd($word)
 	} else {
 		wait for @ :matches = tabkey.default($word)
 	}
@@ -71,9 +81,12 @@ alias tabkey {
 	if (1 < numwords($matches) && word == prefix) {
 		echo Completions for \"$word\": $matches
 	} elsif (#matches && strlen($word) <= strlen($prefix)) {
-		repeat ${curpos()-wordind} parsekey backspace
-		xtype -l $prefix${1<#matches?:[ ]}
+		@ :prefix = 0 > index("$chr($jot(32 1))" $prefix) ? prefix : ["$prefix"]
+		@ :line = mid(0 $wordind $L)
+		parsekey erase_to_beg_of_line
+		xtype -l $line$prefix${1<#matches?[]:[ ]}
 	}
+	xdebug $oxd
 }
 
 alias tabkey.cmd {
@@ -93,7 +106,9 @@ alias tabkey.cmd {
 	while (args) {
 		@ :matches = aliasctl(alias pmatch tabkey.cmd.$args*)
 		@ :matches = prefix($matches)
-		if (aliasctl(alias exists $matches) && matches == [tabkey.cmd.$args]) {
+		if (curword == count(. $args)) {
+		} elsif (matches != [tabkey.cmd.$args]) {
+		} elsif (aliasctl(alias exists $matches)) {
 			@ args = matches
 			break
 		}
@@ -110,13 +125,17 @@ alias tabkey.cmd {
 
 # Context sensitive completion goes here.
 
-alias tabkey.cmd.dcc {return $pattern("$0*" CHAT CLOSE CLOSEALL GET LIST RAW RENAME RESUME SEND)}
+alias tabkey.cmd.dcc (args) {
+	bless
+	switch ($curword) {
+		(1) {return $pattern("$args*" CHAT CLOSE CLOSEALL GET LIST RAW RENAME RESUME SEND)}
+	}
+}
 alias tabkey.cmd.dcc.resume tabkey.cmd.dcc.send
 alias tabkey.cmd.dcc.send {
 	bless
 	switch ($curword) {
-		(0) {echo This should never happen.;call}
-		(1) {echo This should never happen.;call}
+		(0) (1) {echo This should never happen.;call;local}
 		(2) {return $tabkey.method.nick($*)}
 		(*) {return $tabkey.method.filei($*)}
 	}
@@ -139,28 +158,33 @@ alias tabkey.method.commands {
 	return $ret
 }
 
-alias tabkey.method.chan { return $pattern("$0*" $mychannels()); }
-alias tabkey.method.notify { return $pattern("$0*" $notify(on)); }
+alias tabkey.method.chan (args) { return $pattern("$args*" $mychannels()); }
+alias tabkey.method.notify (args) { return $pattern("$args*" $notify(on)); }
 
 alias alias.foo alias $*;alias $sar(g/globi/glob/$sar(g/filei/file/$*))
-alias.foo tabkey.method.filei {
-	@ :f0 = :f1 = globi("$0*")
+alias.foo tabkey.method.filei (f0) {
+	@ :f0 = sar(gr/\\/\\\\/f0)
+	@ :f0 = sar(gr/*/\\*/f0)
+	@ :f0 = sar(gr/?/\\?/f0)
+	@ :f0 = sar(gr/[/\\[/f0)
+	@ :f0 = sar(gr/]/\\]/f0)
+	@ :f0 = :f1 = globi("" $f0*)
 	while (numwords($f0) == 1 && f0 =~ [*/]) {
-		@ f0 = globi($f0*)
+		@ f0 = globi("" $f0*)
 	}
 	return ${f0 ? f0 : f1}
 }
 alias -alias.foo
 
-alias tabkey.method.nick {
-	if (pattern($0* $chanusers())) {
-		return $pattern($0* $chanusers());
+alias tabkey.method.nick (args) {
+	if (match("$args*" $chanusers())) {
+		return $pattern("$args*" $chanusers());
 	} else {
 		@ :chanusers = []
 		fe ($mychannels()) chan {
 			@ push(chanusers $chanusers($chan))
 		}
-		return $pattern($0* $sort($uniq($chanusers)));
+		return $pattern("$args*" $sort($uniq($chanusers)));
 	}
 }
 

@@ -1,4 +1,4 @@
-/* $EPIC: functions.c,v 1.90.2.1 2003/02/27 12:17:24 wd Exp $ */
+/* $EPIC: functions.c,v 1.90.2.2 2003/02/27 15:29:55 wd Exp $ */
 /*
  * functions.c -- Built-in functions for ircII
  *
@@ -64,9 +64,10 @@
 #include "notify.h"
 #include "numbers.h"
 #include "crypt.h"
+#include "timer.h"
+#include "functions.h"
 #include "options"
 
-#include <sys/stat.h>
 #ifdef HAVE_REGEX_H
 # include <regex.h>
 #endif
@@ -188,6 +189,7 @@ static	char
 	*function_afterw 	(char *),
 	*function_aliasctl	(char *),
 	*function_ascii 	(char *),
+	*function_asciiq 	(char *),
 	*function_before 	(char *),
 	*function_beforew 	(char *),
 	*function_bindctl	(char *),
@@ -202,6 +204,7 @@ static	char
 	*function_chop		(char *),
 	*function_chops 	(char *),
 	*function_chr 		(char *),
+	*function_chrq 		(char *),
 	*function_cipher	(char *),
 	*function_close 	(char *),
 	*function_common 	(char *),
@@ -214,17 +217,20 @@ static	char
 	*function_cparse	(char *),
 	*function_crypt 	(char *),
 	*function_currchans	(char *),
+	*function_dccctl	(char *),
 	*function_deuhc		(char *),
 	*function_diff 		(char *),
 	*function_encryptparm 	(char *),
 	*function_eof 		(char *),
 	*function_epic		(char *),
 	*function_error		(char *),
+	*function_exec		(char *),
 	*function_exp		(char *),
 	*function_fnexist	(char *),
 	*function_fexist 	(char *),
 	*function_filter 	(char *),
 	*function_findw		(char *),
+	*function_findws	(char *),
 	*function_floor		(char *),
 	*function_fromw 	(char *),
 	*function_fsize	 	(char *),
@@ -359,7 +365,11 @@ static	char
 	*function_substr	(char *),
 	*function_tan		(char *),
 	*function_tanh		(char *),
-	*function_tow 		(char *),
+	*function_timerctl	(char *),
+#ifdef TCL
+	*function_tcl		(char *),
+#endif
+	*function_tow		(char *),
 	*function_translate 	(char *),
 	*function_truncate 	(char *),
 	*function_ttyname	(char *),
@@ -378,6 +388,7 @@ static	char
 	*function_winchan	(char *),
 	*function_wincurline	(char *),
 	*function_winlevel	(char *),
+	*function_winline	(char *),
 	*function_winnames	(char *),
 	*function_winrefs	(char *),
 	*function_winsbsize	(char *),
@@ -396,6 +407,7 @@ extern char
 	*function_pop		(char *),
 	*function_shift		(char *),
 	*function_unshift	(char *),
+	*function_floodinfo	(char *),
 	*function_xdebug	(char *);
 
 typedef char *(bf) (char *);
@@ -420,7 +432,8 @@ static BuiltInFunctions	built_in_functions[] =
 	{ "AFTER",              function_after 		},
 	{ "AFTERW",             function_afterw 	},
 	{ "ALIASCTL",		function_aliasctl	},
-	{ "ASCII",              function_ascii 		},
+	{ "ASCII",		function_ascii 		},
+	{ "ASCIIQ",		function_asciiq 	},
 	{ "ASIN",		function_asin		},
 	{ "ASINH",		function_asinh		},
 	{ "ATAN",		function_atan		},
@@ -440,7 +453,8 @@ static BuiltInFunctions	built_in_functions[] =
 	{ "CHNGW",              function_chngw 		},
 	{ "CHOP",		function_chop		},
 	{ "CHOPS",              function_chops 		},
-	{ "CHR",                function_chr 		},
+	{ "CHR",		function_chr 		},
+	{ "CHRQ",		function_chrq 		},
 	{ "CIPHER",		function_cipher		},
 	{ "CLOSE",		function_close 		},
 	{ "COMMON",             function_common 	},
@@ -455,6 +469,7 @@ static BuiltInFunctions	built_in_functions[] =
 	{ "CRYPT",		function_crypt		},
 	{ "CURPOS",		function_curpos 	},
 	{ "CURRCHANS",		function_currchans	},
+	{ "DCCCTL",		function_dccctl		},
 	{ "DECODE",	  (bf *)function_decode 	},
 	{ "DELARRAY",           function_delarray 	},
 	{ "DELITEM",            function_delitem	},
@@ -465,12 +480,18 @@ static BuiltInFunctions	built_in_functions[] =
 	{ "ENCRYPTPARM",	function_encryptparm	},
 	{ "EOF",		function_eof 		},
 	{ "EPIC",		function_epic		},
+	{ "EXEC",		function_exec		},
 	{ "EXP",		function_exp		},
 	{ "FERROR",		function_error		},
 	{ "FEXIST",             function_fexist 	},
 	{ "FILTER",             function_filter 	},
-	{ "FINDITEM",           function_finditem 	},
+	{ "FINDITEM",		function_finditem 	},
+#if 1
+	{ "FINDITEMS",		function_finditems 	},
+#endif
 	{ "FINDW",		function_findw		},
+	{ "FINDWS",		function_findws		},
+	{ "FLOODINFO",		function_floodinfo	},
 	{ "FLOOR",		function_floor		},
 	{ "FNEXIST",		function_fnexist	},
 	{ "FREWIND",		function_rewind		},
@@ -504,6 +525,9 @@ static BuiltInFunctions	built_in_functions[] =
 	{ "IDLE",		function_idle		},
 	{ "IFINDFIRST",		function_ifindfirst 	},
 	{ "IFINDITEM",		function_ifinditem	},
+#if 1
+	{ "IFINDITEMS",		function_ifinditems	},
+#endif
 	{ "IGETITEM",           function_igetitem 	},
 	{ "IGETMATCHES",	function_igetmatches	},
 	{ "IGETRMATCHES",	function_igetrmatches	},
@@ -575,7 +599,7 @@ static BuiltInFunctions	built_in_functions[] =
 	{ "OPEN",		function_open 		},
 	{ "PAD",		function_pad		},
 	{ "PASS",		function_pass		},
-	{ "PATTERN",            function_pattern 	},
+	{ "PATTERN",		function_pattern	},
 #ifdef PERL
 	{ "PERL",		function_perl		},
 	{ "PERLCALL",		function_perlcall	},
@@ -647,9 +671,13 @@ static BuiltInFunctions	built_in_functions[] =
 	{ "SUBSTR",		function_substr		},
 	{ "TAN",		function_tan		},
 	{ "TANH",		function_tanh		},
+#ifdef TCL
+	{ "TCL",		function_tcl		},
+#endif
 	{ "TDIFF",		function_tdiff 		},
 	{ "TDIFF2",		function_tdiff2 	},
 	{ "TIME",		function_time 		},
+	{ "TIMERCTL",		function_timerctl	},
 	{ "TOLOWER",		function_tolower 	},
 	{ "TOUPPER",		function_toupper 	},
 	{ "TOW",                function_tow 		},
@@ -676,6 +704,7 @@ static BuiltInFunctions	built_in_functions[] =
 	{ "WINCHAN",		function_winchan	},
 	{ "WINCURSORLINE",	function_wincurline	},
 	{ "WINLEVEL",		function_winlevel	},
+	{ "WINLINE",		function_winline	},
 	{ "WINNAM",		function_winnam 	},
 	{ "WINNICKLIST",	function_winnames	},
 	{ "WINNUM",		function_winnum 	},
@@ -732,11 +761,9 @@ char	*call_function (char *name, const char *args, int *args_flag)
 	char	*debug_copy = (char *) 0;
 	int	cnt, pos;
 	char	*lparen, *rparen;
-	int	debugging = 0;
+	int	debugging;
 
-	debugging = 1;
-	if (get_int_var(DEBUG_VAR) & DEBUG_FUNCTIONS)
-		debugging = 2;
+	debugging = get_int_var(DEBUG_VAR);
 
 	if ((lparen = strchr(name, '(')))
 	{
@@ -770,7 +797,7 @@ char	*call_function (char *name, const char *args, int *args_flag)
 		sprintf(buf, "$%s(%s)", name, debug_copy);
 		MUST_BE_MALLOCED(result, buf);
 
-		if (debugging == 2)
+		if (debugging & DEBUG_FUNCTIONS)
 			yell("Function %s(%s) returned %s", 
 				name, debug_copy, result);
 	}
@@ -802,23 +829,23 @@ static	char	*alias_buffer 		(void) { return m_strdup(cut_buffer); }
 static	char	*alias_time 		(void) { return m_strdup(update_clock(GET_TIME)); }
 static	char	*alias_dollar 		(void) { return m_strdup("$"); }
 static	char	*alias_detected 	(void) { return m_strdup(last_notify_nick); }
-static	char	*alias_nick 		(void) { return m_strdup((current_window->server != -1) ? get_server_nickname(current_window->server) : empty_string); }
+static	char	*alias_nick 		(void) { return m_strdup((current_window->server != NOSERV) ? get_server_nickname(current_window->server) : empty_string); }
 static	char	*alias_away 		(void) { return m_strdup(get_server_away(from_server)); }
-static  char    *alias_sent_nick        (void) { return m_strdup((get_server_sent_nick()) ? get_server_sent_nick() : empty_string); }
-static  char    *alias_recv_nick        (void) { return m_strdup((get_server_recv_nick()) ? get_server_recv_nick() : empty_string); }
-static  char    *alias_msg_body         (void) { return m_strdup((get_server_sent_body()) ? get_server_sent_body() : empty_string); }
-static  char    *alias_joined_nick      (void) { return m_strdup((get_server_joined_nick()) ? get_server_joined_nick() : empty_string); }
-static  char    *alias_public_nick      (void) { return m_strdup((get_server_public_nick()) ? get_server_public_nick() : empty_string); }
+static  char    *alias_sent_nick        (void) { return m_strdup((get_server_sent_nick(from_server)) ? get_server_sent_nick(from_server) : empty_string); }
+static  char    *alias_recv_nick        (void) { return m_strdup((get_server_recv_nick(from_server)) ? get_server_recv_nick(from_server) : empty_string); }
+static  char    *alias_msg_body         (void) { return m_strdup((get_server_sent_body(from_server)) ? get_server_sent_body(from_server) : empty_string); }
+static  char    *alias_joined_nick      (void) { return m_strdup((get_server_joined_nick(from_server)) ? get_server_joined_nick(from_server) : empty_string); }
+static  char    *alias_public_nick      (void) { return m_strdup((get_server_public_nick(from_server)) ? get_server_public_nick(from_server) : empty_string); }
 static  char    *alias_show_realname 	(void) { return m_strdup(realname); }
 static	char	*alias_version_str 	(void) { return m_strdup(irc_version); }
-static  char    *alias_invite           (void) { return m_strdup((get_server_invite_channel()) ? get_server_invite_channel() : empty_string); }
+static  char    *alias_invite           (void) { return m_strdup((get_server_invite_channel(from_server)) ? get_server_invite_channel(from_server) : empty_string); }
 static	char	*alias_oper 		(void) { return m_strdup((from_server != -1) ? get_server_operator(from_server) ?  get_string_var(STATUS_OPER_VAR) : empty_string : empty_string); }
 static	char	*alias_version 		(void) { return m_strdup(internal_version); }
 static  char    *alias_show_userhost 	(void) { return m_strdup(get_server_userhost(from_server)); }
 static  char    *alias_online 		(void) { return m_sprintf("%ld",(long)start_time.tv_sec); }
 static  char    *alias_idle 		(void) { return m_sprintf("%ld",time(NULL)-idle_time.tv_sec); }
 static	char	*alias_current_numeric	(void) { return m_sprintf("%03d", -current_numeric); }
-static	char	*alias_banner		(void) { return m_strdup(numeric_banner()); }
+static	char	*alias_banner		(void) { return m_strdup(banner()); }
 
 static	char	*alias_currdir  	(void)
 {
@@ -834,10 +861,11 @@ static	char	*alias_channel 		(void)
 
 static	char	*alias_server 		(void)
 {
-	return m_strdup((parsing_server_index != -1) ?
+	return m_strdup((parsing_server_index != NOSERV) ?
 		         get_server_itsname(parsing_server_index) :
-		         (get_window_server(0) != -1) ?
-			        get_server_itsname(get_window_server(0)) : empty_string);
+		         (get_window_server(0) != NOSERV) ?
+			        get_server_itsname(get_window_server(0)) : 
+				empty_string);
 }
 
 static	char	*alias_query_nick 	(void)
@@ -881,9 +909,9 @@ static	char	*alias_server_version  (void)
 {
 	int s = from_server;
 
-	if (s == -1)
+	if (s == NOSERV)
 	{
-		if (primary_server != -1)
+		if (primary_server != NOSERV)
 			s = primary_server;
 		else
 			return m_strdup(empty_string);
@@ -902,38 +930,6 @@ static	char	*alias_server_version  (void)
 	optimization reasons, and also to further distance ircii's code
 	from EPIC.
  *	*	*	*	*	*	*	*	*	*/
-
-/* 
- * These are defined to make the construction of the built-in functions
- * easier and less prone to bugs and unexpected behaviors.  As long as
- * you consistently use these macros to do the dirty work for you, you
- * will never have to do bounds checking as the macros do that for you. >;-) 
- *
- * Yes, i realize it makes the code slightly less efficient, but i feel that 
- * the cost is minimal compared to how much time i have spent over the last 
- * year debugging these functions and the fact i wont have to again. ;-)
- */
-#define EMPTY empty_string
-#define EMPTY_STRING m_strdup(EMPTY)
-#define RETURN_EMPTY return EMPTY_STRING
-#define RETURN_IF_EMPTY(x) if (empty( (x) )) RETURN_EMPTY
-#define GET_INT_ARG(x, y) {RETURN_IF_EMPTY((y)); x = my_atol(safe_new_next_arg((y), &(y)));}
-#define GET_FLOAT_ARG(x, y) {RETURN_IF_EMPTY((y)); x = atof(safe_new_next_arg((y), &(y)));}
-#define GET_STR_ARG(x, y) {RETURN_IF_EMPTY((y)); x = new_next_arg((y), &(y));RETURN_IF_EMPTY((x));}
-#define RETURN_MSTR(x) return ((x) ? (x) : EMPTY_STRING);
-#define RETURN_STR(x) return m_strdup((x) ? (x) : EMPTY)
-#define RETURN_INT(x) return m_strdup(ltoa((x)))
-#define RETURN_FLOAT(x) return m_sprintf("%.50g", (double) (x))
-
-/*
- * XXXX REALLY REALLY REALLY REALLY REALLY REALLY REALLY IMPORTANT! XXXX
- *
- * Don't ever Ever EVER pass a function call to the RETURN_* macros.
- * They _WILL_ evaluate the term twice, and for some function calls, 
- * that can result in a memory leak, or worse.
- */
-
-#define BUILT_IN_FUNCTION(x, y) static char * x (char * y)
 
 /*
  * Usage: $left(number text)
@@ -1130,7 +1126,7 @@ BUILT_IN_FUNCTION(function_tdiff, input)
 	if (seconds || (!days && !hours && !minutes) || 
 			(*after == '.' && is_number(after + 1)))
 	{
-		u_long number = 0;
+		unsigned long number = 0;
 
 		/*
 		 * If we have a decmial point, and is_number() returns 1,
@@ -1211,12 +1207,9 @@ BUILT_IN_FUNCTION(function_match, input)
 
 	GET_STR_ARG(pattern, input);
 
-	while (input && *input)
+	while ((word = new_next_arg(input, &input)))
 	{
-		while (input && my_isspace(*input))
-			input++;
 		match_index++;
-		GET_STR_ARG(word, input);
 		if ((current_match = wild_match(pattern, word)) > best_match)
 		{
 			match = match_index;
@@ -1245,20 +1238,19 @@ BUILT_IN_FUNCTION(function_rmatch, input)
 
 	GET_STR_ARG(word, input);
 
-	while (input && *input)
+	while ((pattern = new_next_arg(input, &input)))
 	{
-		while (input && my_isspace(*input))
-			input++;
 		rmatch_index++;
-		GET_STR_ARG(pattern, input);
 		if ((current_match = wild_match(pattern, word)) > best_match)
 		{
 			match = rmatch_index;
 			best_match = current_match;
 		}
+#if 0
 		/* WARNING WARNING HACK IN PROGRESS WARNING WARNING */
 		while (input && my_isspace(*input))
 			input++;
+#endif
 	}
 
 	RETURN_INT(match);
@@ -1433,7 +1425,13 @@ BUILT_IN_FUNCTION(function_word, word)
 BUILT_IN_FUNCTION(function_winnum, input)
 {
 	Window *win = NULL;
-	if (!(win = *input ? get_window_by_desc(input) : current_window))
+
+	if (input && *input)
+		win = get_window_by_desc(input);
+	else
+		win = get_window_by_refnum(0);
+
+	if (!win)
 		RETURN_INT(-1);
 	RETURN_INT(win->refnum);
 }
@@ -1441,7 +1439,13 @@ BUILT_IN_FUNCTION(function_winnum, input)
 BUILT_IN_FUNCTION(function_winnam, input)
 {
 	Window *win = NULL;
-	if (!(win = *input ? get_window_by_desc(input) : current_window))
+
+	if (input && *input)
+		win = get_window_by_desc(input);
+	else
+		win = get_window_by_refnum(0);
+
+	if (!win)
 		RETURN_EMPTY;
 	RETURN_STR(win->name);
 }
@@ -1540,8 +1544,20 @@ BUILT_IN_FUNCTION(function_channels, input)
 		Window  *window;
 
 		server = -1;
+
+		/* 
+		 * You may be wondering what I'm doing here.  It used to 
+		 * be a historical idiom that you could do $mychannels(serv)
+		 * or $mychannels(#winref).  The "#" thing was handled else-
+		 * where, but I took it out becuase it had evil side effects.
+		 * But people need to be able to use "#" here, so specifically
+		 * support "#" here if needed.
+		 */
  		if ((window = get_window_by_desc(input)))
 			server = window->server;
+		else if (*input == '#')
+			if (window = get_window_by_desc(input + 1))
+				server = window->server;
 	}
 
 	retval = create_channel_list(server);
@@ -1560,9 +1576,9 @@ BUILT_IN_FUNCTION(function_servers, input)
 		RETURN_MSTR(retval);
 	}
 
-	for (count = 0; count < number_of_servers; count++)
+	for (count = 0; count < server_list_size(); count++)
 	{
-		if (is_server_connected(count))
+		if (is_server_registered(count))
 			m_sc3cat(&retval, space, ltoa(count), &rvclue);
 	}
 	if (!retval)
@@ -2179,7 +2195,7 @@ BUILT_IN_FUNCTION(function_beforew, word)
 	char	*placeholder;
 
 	lame = LOCAL_COPY(word);
-	where = my_atol((placeholder = function_rmatch(word)));
+	where = my_atol((placeholder = function_findw(word))) + 1;
 	new_free(&placeholder);
 
 	if (where < 1)
@@ -2197,7 +2213,7 @@ BUILT_IN_FUNCTION(function_tow, word)
 	char	*placeholder;
 
 	lame = LOCAL_COPY(word);
-	where = my_atol((placeholder = function_rmatch(word)));
+	where = my_atol((placeholder = function_findw(word))) + 1;
 	new_free(&placeholder);
 
 	if (where < 1)
@@ -2215,8 +2231,8 @@ BUILT_IN_FUNCTION(function_afterw, word)
 	char	*placeholder;
 
 	lame = m_strdup(word);
-	placeholder = function_rmatch(word);
-	where = my_atol(placeholder);
+	placeholder = function_findw(word);
+	where = my_atol(placeholder) + 1;
 
 	new_free(&placeholder);
 
@@ -2238,8 +2254,8 @@ BUILT_IN_FUNCTION(function_fromw, word)
 	char	*placeholder;
 
 	lame = m_strdup(word);
-	placeholder = function_rmatch(word);
-	where = my_atol(placeholder);
+	placeholder = function_findw(word);
+	where = my_atol(placeholder) + 1;
 
 	new_free(&placeholder);
 
@@ -2818,6 +2834,25 @@ BUILT_IN_FUNCTION(function_chr, word)
 	RETURN_MSTR(aboo);
 }
 
+BUILT_IN_FUNCTION(function_chrq, word)
+{
+	char *aboo = NULL;
+	char *ack;
+	char *blah;
+
+	aboo = new_malloc(word_count(word) + 1);
+	ack = aboo;
+	
+	while ((blah = next_arg(word, &word)))
+		*ack++ = (char)my_atol(blah);
+
+	*ack = '\0';
+	ack = enquote_it(aboo, ack-aboo);
+	new_free(&aboo);
+
+	RETURN_MSTR(ack);
+}
+
 BUILT_IN_FUNCTION(function_ascii, word)
 {
 	char *aboo = NULL;
@@ -2826,9 +2861,27 @@ BUILT_IN_FUNCTION(function_ascii, word)
 	if (!word || !*word)
 		RETURN_EMPTY;
 
-	aboo = m_strdup(ltoa((long)(unsigned char)*word));
-	while (*++word)
-		m_c3cat(&aboo, space, ltoa((long)(unsigned char)*word), &rvclue);
+	for (; *word; ++word)
+		m_sc3cat_s(&aboo, space, ltoa((long)(unsigned char)*word), &rvclue);
+
+	return aboo;
+}
+
+BUILT_IN_FUNCTION(function_asciiq, word)
+{
+	char	*aboo = NULL, *free;
+	size_t	rvclue=0;
+	size_t	len = strlen(word);
+
+	if (!word || !*word)
+		RETURN_EMPTY;
+
+	free = word = dequote_it(word, &len);
+
+	for (; 0 < len--; word++)
+		m_sc3cat_s(&aboo, space, ltoa((long)(unsigned char)*word), &rvclue);
+
+	new_free(&free);
 
 	return aboo;
 }
@@ -3068,11 +3121,7 @@ BUILT_IN_FUNCTION(function_server_version, word)
 	int servnum;
 	int version;
 
-	servnum = ((word && *word) ? my_atol(next_arg(word, &word)) : primary_server);
-
-	if (servnum > number_of_servers)
-		RETURN_STR("unknown");
-
+	servnum = parse_server_index(word, 1);
 	version = get_server_version(servnum);
 
 	if (version == Server2_8) 		RETURN_STR("2.8");
@@ -3109,12 +3158,10 @@ BUILT_IN_FUNCTION(function_rename, words)
 	Filename expanded2;
 
 	GET_STR_ARG(filename1, words)
-	if (normalize_filename(filename1, expanded1))
-		RETURN_INT(-1);
+	normalize_filename(filename1, expanded1);
 
 	GET_STR_ARG(filename2, words)
-	if (normalize_filename(filename2, expanded2))
-		RETURN_INT(-1);
+	normalize_filename(filename2, expanded2);
 
 	RETURN_INT(rename(expanded1, expanded2));
 }
@@ -3239,7 +3286,7 @@ BUILT_IN_FUNCTION(function_tdiff2, input)
  */
 BUILT_IN_FUNCTION(function_utime, input)
 {
-	struct timeval tp;
+	Timeval tp;
 
 	get_time(&tp);
 	return m_sprintf("%ld %ld", (long)tp.tv_sec, (long)tp.tv_usec);
@@ -3265,84 +3312,82 @@ BUILT_IN_FUNCTION(function_stripansi, input)
 
 BUILT_IN_FUNCTION(function_servername, input)
 {
-	int 	sval = from_server;
-	const char *	which;
+	int 		refnum;
+	const char *	itsname;
 
 	if (*input)
-		GET_INT_ARG(sval, input);
+	{
+		const char *	serv;
 
-	/* garbage in, garbage out. */
-	if (sval < 0 || sval >= number_of_servers)
-		RETURN_EMPTY;
+		GET_STR_ARG(serv, input);
+		refnum = parse_server_index(serv, 1);
+	}
+	else
+		refnum = from_server;
 
-	/* First we try to see what the server thinks it name is */
-	which = get_server_itsname(sval);
-
-	/* Next we try what we think its name is */
-	if (!which)
-		which = get_server_name(sval);
-
-	/* Ok. i give up, return a null. */
-	RETURN_STR(which);
+	/* get_server_itsname does all the work for us. */
+	itsname = get_server_itsname(refnum);
+	RETURN_STR(itsname);
 }
 
 BUILT_IN_FUNCTION(function_serverourname, input)
 {
-	int 	sval = from_server;
-	const char *	which;
+	int 		refnum;
+	const char *	ourname;
 
 	if (*input)
-		GET_INT_ARG(sval, input);
+	{
+		const char *	serv;
 
-	/* garbage in, garbage out. */
-	if (sval < 0 || sval >= number_of_servers)
-		RETURN_EMPTY;
+		GET_STR_ARG(serv, input);
+		refnum = parse_server_index(serv, 1);
+	}
+	else
+		refnum = from_server;
 
-	/* Skip the itsname test. */
-
-	/* Next we try what we think its name is */
-	which = get_server_name(sval);
-
-	/* Ok. i give up, return a null. */
-	RETURN_STR(which);
+	/* Ask it what our name is */
+	ourname = get_server_name(refnum);
+	RETURN_STR(ourname);
 }
 
 BUILT_IN_FUNCTION(function_servergroup, input)
 {
-	int 	sval = from_server;
-	const char *	which;
+	int 		refnum;
+	const char *	group;
 
 	if (*input)
-		GET_INT_ARG(sval, input);
+	{
+		const char *	serv;
 
-	/* garbage in, garbage out. */
-	if (sval < 0 || sval >= number_of_servers)
-		RETURN_EMPTY;
+		GET_STR_ARG(serv, input);
+		refnum = parse_server_index(serv, 1);
+	}
+	else
+		refnum = from_server;
 
-	/* Next we try what we think its name is */
-	which = get_server_group(sval);
-
-	/* Ok. i give up, return a null. */
-	RETURN_STR(which);
+	/* Next we try what we think its group is */
+	group = get_server_group(refnum);
+	RETURN_STR(group);
 }
 
 BUILT_IN_FUNCTION(function_servertype, input)
 {
-	int 	sval = from_server;
-	const char *	which;
+	int 		refnum;
+	const char *	group;
 
 	if (*input)
-		GET_INT_ARG(sval, input);
+	{
+		const char *	serv;
 
-	/* garbage in, garbage out. */
-	if (sval < 0 || sval >= number_of_servers)
-		RETURN_EMPTY;
+		GET_STR_ARG(serv, input);
+		refnum = parse_server_index(serv, 1);
+	}
+	else
+		refnum = from_server;
 
-	/* Next we try what we think its name is */
-	which = get_server_type(sval);
-
-	/* Ok. i give up, return a null. */
-	RETURN_STR(which);
+	/* Next we try what we think its type is */
+	group = get_server_type(refnum);
+	RETURN_STR(group);
 }
 
 BUILT_IN_FUNCTION(function_lastserver, input)
@@ -3352,16 +3397,14 @@ BUILT_IN_FUNCTION(function_lastserver, input)
 
 BUILT_IN_FUNCTION(function_winserv, input)
 {
-	int win = 0;
-	char *tmp;
 	Window *winp;
 
 	if (input && *input)
-	{
-		if ((tmp = new_next_arg(input, &input)))
-			win = my_atol(tmp);
-	}
-	if ((winp = get_window_by_refnum(win)))
+		winp = get_window_by_desc(input);
+	else
+		winp = get_window_by_refnum(0);
+
+	if (winp)
 		RETURN_INT(winp->server);
 
 	RETURN_INT(-1);
@@ -3382,6 +3425,8 @@ BUILT_IN_FUNCTION(function_aliasctl, input)
 	extern char *aliasctl (char *);
 	return aliasctl(input);
 }
+
+
 
 /* 
  * Next two contributed by Scott H Kilau (sheik), who for some reason doesnt 
@@ -3545,21 +3590,17 @@ BUILT_IN_FUNCTION(function_epic, words)
 
 BUILT_IN_FUNCTION(function_winsize, words)
 {
-	int refnum;
 	Window *win;
 
 	if (words && *words)
-	{
-		GET_INT_ARG(refnum, words);
-		win = get_window_by_refnum(refnum);
-	}
+		win = get_window_by_desc(words);
 	else
-		win = current_window;
+		win = get_window_by_refnum(0);
 
-	if (!win)
-		RETURN_EMPTY;
+	if (win)
+		RETURN_INT(win->display_size);
 
-	RETURN_INT(win->display_size);
+	RETURN_EMPTY;
 }
 
 
@@ -3683,16 +3724,25 @@ BUILT_IN_FUNCTION(function_glob, word)
 	memset(&globbers, 0, sizeof(glob_t));
 	while (word && *word)
 	{
-		GET_STR_ARG(path, word);
-		if (normalize_filename(path, path2))
-			strlcpy(path2, path, sizeof(path2));
+		char	*freepath = NULL;
 
-		if ((numglobs = glob(path2, GLOB_MARK, NULL, &globbers)) < 0)
+		GET_STR_ARG(path, word);
+		if (!path || !*path)
+			path = word, word = NULL;
+		else
+		{
+			size_t	len = strlen(path);
+			freepath = path = dequote_it(path,&len);
+		}
+		expand_twiddle(path, path2);
+
+		if ((numglobs = glob(path2, GLOB_MARK | GLOB_QUOTE | GLOB_BRACE,
+						NULL, &globbers)) < 0)
 			RETURN_INT(numglobs);
 
 		for (i = 0; i < globbers.gl_pathc; i++)
 		{
-			if (strchr(globbers.gl_pathv[i], ' '))
+			if (sindex(globbers.gl_pathv[i], " \""))
 			{
 				char *b = alloca(strlen(globbers.gl_pathv[i]) + 4);
 				sprintf(b, "\"%s\"", globbers.gl_pathv[i]);
@@ -3702,10 +3752,10 @@ BUILT_IN_FUNCTION(function_glob, word)
 				m_sc3cat(&retval, space, globbers.gl_pathv[i], &rvclue);
 		}
 		globfree(&globbers);
+		new_free(&freepath);
 	}
 
-	RETURN_IF_EMPTY(retval);
-	return retval;
+	RETURN_MSTR(retval);
 }
 
 BUILT_IN_FUNCTION(function_globi, word)
@@ -3720,17 +3770,26 @@ BUILT_IN_FUNCTION(function_globi, word)
 	memset(&globbers, 0, sizeof(glob_t));
 	while (word && *word)
 	{
-		GET_STR_ARG(path, word);
-		if (normalize_filename(path, path2))
-			strlcpy(path2, path, sizeof(path2));
+		char	*freepath = NULL;
 
-		if ((numglobs = bsd_glob(path2, GLOB_MARK | GLOB_INSENSITIVE, 
-					NULL, &globbers)) < 0)
+		GET_STR_ARG(path, word);
+		if (!path || !*path)
+			path = word, word = NULL;
+		else
+		{
+			size_t	len = strlen(path);
+			freepath = dequote_it(path,&len);
+		}
+		expand_twiddle(path, path2);
+
+		if ((numglobs = bsd_glob(path2,
+				GLOB_MARK | GLOB_INSENSITIVE | GLOB_QUOTE | GLOB_BRACE, 
+				NULL, &globbers)) < 0)
 			RETURN_INT(numglobs);
 
 		for (i = 0; i < globbers.gl_pathc; i++)
 		{
-			if (strchr(globbers.gl_pathv[i], ' '))
+			if (sindex(globbers.gl_pathv[i], " \""))
 			{
 				char *b = alloca(strlen(globbers.gl_pathv[i]) + 4);
 				sprintf(b, "\"%s\"", globbers.gl_pathv[i]);
@@ -3740,10 +3799,10 @@ BUILT_IN_FUNCTION(function_globi, word)
 				m_sc3cat(&retval, space, globbers.gl_pathv[i], &rvclue);
 		}
 		bsd_globfree(&globbers);
+		new_free(&freepath);
 	}
 
-	RETURN_IF_EMPTY(retval);
-	return retval;
+	RETURN_MSTR(retval);
 }
 
 
@@ -3754,9 +3813,8 @@ BUILT_IN_FUNCTION(function_mkdir, words)
 
 	while (words && *words)
 	{
-		if (normalize_filename(new_next_arg(words, &words), expanded))
-			failure++;
-		else if (mkdir(expanded, 0777))
+		normalize_filename(new_next_arg(words, &words), expanded);
+		if (mkdir(expanded, 0777))
 			failure++;
 	}
 
@@ -3952,9 +4010,7 @@ BUILT_IN_FUNCTION(function_winchan, input)
 		chan = arg1;
 		if ((serv = new_next_arg(input, &input)))
 		{
-			if (my_isdigit(serv))
-				servnum = my_atol(serv);
-			else
+			if ((servnum = parse_server_index(serv, 0)) == NOSERV)
 				servnum = find_in_server_list(serv, 0);
 		}
 
@@ -3970,15 +4026,16 @@ BUILT_IN_FUNCTION(function_winchan, input)
 	 */
 	else 
 	{
-		Window *win = current_window;
+		Window *win;
 
 		if (arg1 && *arg1)
 			win = get_window_by_desc(arg1);
+		else
+			win = get_window_by_refnum(0);
 
-		if (!win)
-			RETURN_EMPTY;
-
-		RETURN_STR(win->current_channel);
+		if (win)
+			RETURN_STR(win->current_channel);
+		RETURN_EMPTY;
 	}
 }
 
@@ -3999,6 +4056,25 @@ BUILT_IN_FUNCTION(function_findw, input)
 	}
 
 	RETURN_INT(-1);
+}
+
+BUILT_IN_FUNCTION(function_findws, input)
+{
+	char	*word, *this_word;
+	int	word_cnt;
+	char	*ret = NULL;
+	size_t	clue = 0;
+
+	GET_STR_ARG(word, input);
+
+	for (word_cnt = 0; input && *input; word_cnt++)
+	{
+		GET_STR_ARG(this_word, input);
+		if (!my_stricmp(this_word, word))
+			m_sc3cat_s(&ret, space, ltoa(word_cnt), &clue);
+	}
+
+	RETURN_MSTR(ret);
 }
 
 
@@ -4048,36 +4124,28 @@ BUILT_IN_FUNCTION(function_deuhc, input)
  */
 BUILT_IN_FUNCTION(function_winbound, input)
 {
-	Window *foo;
-	char *	stuff;
+	Window *win;
 	char *	retval;
 
-	if (!(stuff = new_next_arg(input, &input)))
-		RETURN_EMPTY;
-	if (my_atol(stuff) && (foo = get_window_by_refnum((unsigned)my_atol(stuff))))
-	{
-		retval = get_bound_channel(foo);
-		RETURN_STR(retval);
-	}
-	else if ((foo = get_window_by_name(stuff)))
-	{
-		retval = get_bound_channel(foo);
-		RETURN_STR(retval);
-	}
-	else if ((foo = get_window_bound_channel(stuff)))
-	{
-		retval = get_refnum_by_window(foo);
-		RETURN_STR(retval);
-	}
+	if (input && *input && is_channel(input))
+		win = get_window_bound_channel(input);
+	else if (input && *input)
+		win = get_window_by_desc(input);
+	else
+		win = get_window_by_refnum(0);
 
-	RETURN_EMPTY;
+	if (!win)
+		RETURN_EMPTY;
+
+	retval = get_bound_channel(win);
+	RETURN_STR(retval);
 }
 
 BUILT_IN_FUNCTION(function_ftime, words)
 {
-	char	*filename;
+	char *	filename;
 	Filename fullname;
-	struct stat s;
+	Stat 	s;
 
 	GET_STR_ARG(filename, words);
 
@@ -4165,11 +4233,11 @@ BUILT_IN_FUNCTION(function_servernick, input)
 	if (*input)
 	{
 		GET_STR_ARG(servdesc, input);
-		if ((refnum = parse_server_index(servdesc)) == -1)
-			if ((refnum = find_in_server_list(servdesc, 0)) == -1)
+		if ((refnum = parse_server_index(servdesc, 1)) == NOSERV)
+			if ((refnum = find_in_server_list(servdesc, 0)) == NOSERV)
 				RETURN_EMPTY;
 	}
-	else if (from_server != -1)
+	else if (from_server != NOSERV)
 		refnum = from_server;
 	else
 		RETURN_EMPTY;
@@ -4185,7 +4253,7 @@ BUILT_IN_FUNCTION(function_winnames, input)
 	if (*input)
 		win = get_window_by_desc(input);
 	else
-		win = current_window;
+		win = get_window_by_refnum(0);
 
 	if (!win)
 		RETURN_EMPTY;
@@ -4208,26 +4276,26 @@ BUILT_IN_FUNCTION(function_isconnected, input)
 	if (refnum == -1)
 		refnum = from_server;
 
-	RETURN_INT(is_server_connected(refnum));
+	RETURN_INT(is_server_registered(refnum));
 }
 
 BUILT_IN_FUNCTION(function_currchans, input)
 {
-	int server = -1;
+	int server = NOSERV;
 	Window *blah = NULL;
 	char *retval = NULL;
 
 	if (input && *input)
 		GET_INT_ARG(server, input)
 	else
-		server = -2;
+		server = NOSERV;
 
-	if (server == -1)
+	if (server == NOSERV)
 		server = from_server;
 
 	while (traverse_all_windows(&blah))
 	{
-		if (server != -2 && blah->server != server)
+		if (server != NOSERV && blah->server != server)
 			continue;
 		if (!blah->current_channel)
 			continue;
@@ -5041,7 +5109,7 @@ BUILT_IN_FUNCTION(function_servports, input)
 
 	if (servnum == -1)
 		servnum = from_server;
-	if (servnum < 0 || servnum > number_of_servers)
+	if (servnum < 0 || servnum > server_list_size())
 		RETURN_EMPTY;
 
 	return m_sprintf("%d %d", get_server_port(servnum),
@@ -5064,16 +5132,12 @@ BUILT_IN_FUNCTION(function_chop, input)
 BUILT_IN_FUNCTION(function_winlevel, input)
 {
 	Window	*win;
-	char	*desc;
 	char *	retval;
 
 	if (input && *input)
-	{
-		GET_STR_ARG(desc, input);
-		win = get_window_by_desc(desc);
-	}
+		win = get_window_by_desc(input);
 	else
-		win = current_window;
+		win = get_window_by_refnum(0);
 
 	if (!win)
 		RETURN_EMPTY;
@@ -5371,7 +5435,7 @@ BUILT_IN_FUNCTION(function_servernum, input)
 	/* 
 	 * Return current server refnum if no input given
 	 */
-	if (!*input)
+	if (!input || !*input)
 		RETURN_INT(from_server);
 
 	GET_STR_ARG(which, input);
@@ -5379,7 +5443,7 @@ BUILT_IN_FUNCTION(function_servernum, input)
 	/*
 	 * Find the matching server name from the list
 	 */
-	for (sval = 0; sval < number_of_servers; sval++) 
+	for (sval = 0; sval < server_list_size(); sval++) 
 	{
 		/*
 		 * Try and match to what the server thinks its name is
@@ -5948,9 +6012,9 @@ BUILT_IN_FUNCTION(function_urldecode, input)
 
 BUILT_IN_FUNCTION(function_stat, input)
 {
-	char *		filename;
-	char 		retval[BIG_BUFFER_SIZE];
-	struct stat	sb;
+	char *	filename;
+	char 	retval[BIG_BUFFER_SIZE];
+	Stat	sb;
 
 	GET_STR_ARG(filename, input);
 	if (stat(filename, &sb) < 0)
@@ -5965,9 +6029,9 @@ BUILT_IN_FUNCTION(function_stat, input)
 		(int)	sb.st_uid,		/* Owner UID */
 		(int)	sb.st_gid,		/* Owner GID */
 		(int)	sb.st_rdev,		/* Device type */
-		(u_long)sb.st_size,		/* Size of file */
-		(u_long)sb.st_blksize,		/* Size of each block */
-		(u_long)sb.st_blocks,		/* Blocks used in file */
+		(unsigned long)sb.st_size,	/* Size of file */
+		(unsigned long)sb.st_blksize,	/* Size of each block */
+		(unsigned long)sb.st_blocks,	/* Blocks used in file */
 		(long)	sb.st_atime,		/* Last-access time */
 		(long)	sb.st_mtime,		/* Last-modified time */
 		(long)	sb.st_ctime		/* Last-change time */
@@ -6028,7 +6092,7 @@ BUILT_IN_FUNCTION(function_builtin, input)
  * Author: IceKarma (ankh@canuck.gen.nz)
  * Contributed by: author
  *
- * Usage: $winscreen(#channel <server refnum|server name>)
+ * Usage: $winscreen(window <server refnum|server name>)
  * Given a channel name and either a server refnum or a direct server
  * name or an effective server name, this function will return the
  * refnum of the window where the channel is the current channel (on that
@@ -6039,21 +6103,17 @@ BUILT_IN_FUNCTION(function_builtin, input)
  */
 BUILT_IN_FUNCTION(function_winscreen, input)
 {
-	Window *	foo = NULL;
-	char *		stuff;
-	int		num;
+	Window *	win = NULL;
 
-	if (!(stuff = new_next_arg(input, &input)))
+	if (input && *input)
+		win = get_window_by_desc(input);
+	else
+		win = get_window_by_refnum(0);
+
+	if (!win || !win->screen)
 		RETURN_INT(-1);
 
-	if ((num = my_atol(stuff)))
-		foo = get_window_by_refnum(num);
-	if (!foo)
-		foo = get_window_by_name(stuff);
-	if (!foo || !foo->screen)
-		RETURN_INT(-1);
-
-	RETURN_INT(foo->screen->screennum);
+	RETURN_INT(win->screen->screennum);
 }
 
 /*
@@ -6104,12 +6164,16 @@ BUILT_IN_FUNCTION(function_wordtoindex, input)
  */
 BUILT_IN_FUNCTION(function_winsbsize, input)
 {
-	Window *winp;
+	Window *win;
 
-	if (!(winp = *input ? get_window_by_desc(input) : current_window))
+	if (input && *input)
+		win = get_window_by_desc(input);
+	else
+		win = get_window_by_refnum(0);
+
+	if (!win)
 		RETURN_INT(-1);
-
-	RETURN_INT(winp->display_buffer_size - 1);
+	RETURN_INT(win->display_buffer_size - 1);
 }
 
 /*
@@ -6126,11 +6190,16 @@ BUILT_IN_FUNCTION(function_winsbsize, input)
  */
 BUILT_IN_FUNCTION(function_winstatsize, input)
 {
-	Window *winp;
+	Window *win;
 
-	if (!(winp = *input ? get_window_by_desc(input) : current_window))
+	if (input && *input)
+		win = get_window_by_desc(input);
+	else
+		win = get_window_by_refnum(0);
+
+	if (!win)
 		RETURN_INT(-1);
-	RETURN_INT(winp->status.double_status ? 2 : 1);
+	RETURN_INT(win->status.double_status ? 2 : 1);
 }
 
 /*
@@ -6147,11 +6216,44 @@ BUILT_IN_FUNCTION(function_winstatsize, input)
  */
 BUILT_IN_FUNCTION(function_wincurline, input)
 {
-	Window *winp;
+	Window *win;
 
-	if (!(winp = *input ? get_window_by_desc(input) : current_window))
+	if (input && *input)
+		win = get_window_by_desc(input);
+	else
+		win = get_window_by_refnum(0);
+
+	if (!win)
 		RETURN_INT(-1);
-	RETURN_INT(winp->cursor);
+	RETURN_INT(win->cursor);
+}
+
+BUILT_IN_FUNCTION(function_winline, input)
+{
+	Window	*win;
+	Display	*Line;
+	int	line;
+
+	GET_INT_ARG(line, input);
+
+	if (input && *input)
+		win = get_window_by_desc(input);
+	else
+		win = get_window_by_refnum(0);
+
+	if (!win)
+		RETURN_INT(-1);
+
+	Line = win->top_of_display;
+	for (; line > 0 && Line; line--)
+		Line = Line->next;
+
+	if (Line && Line->line) {
+		char *ret = denormalize_string(Line->line);
+		RETURN_MSTR(ret);
+	}
+	else 
+		RETURN_EMPTY;
 }
 
 /*
@@ -6195,7 +6297,7 @@ BUILT_IN_FUNCTION(function_isencrypted, input)
 		GET_INT_ARG(sval, input);
 
 	/* garbage in, garbage out. */
-	if (sval < 0 || sval >= number_of_servers)
+	if (sval < 0 || sval >= server_list_size())
 		RETURN_INT(0);
 
 	/* Check if it is encrypted connection */
@@ -6213,19 +6315,17 @@ BUILT_IN_FUNCTION(function_ssl, words)
 
 BUILT_IN_FUNCTION(function_cipher, input)
 {
-#ifdef HAVE_SSL
-	int     sval = from_server;
+	int     	sval = from_server;
+	const char *	ret;
 
 	if (*input)
 		GET_INT_ARG(sval, input);
 
-	if (sval < 0 || sval >= number_of_servers)
+	if (sval < 0 || sval >= server_list_size())
 		RETURN_STR(NULL);
 
-	RETURN_STR(get_server_cipher(sval));
-#else
-	RETURN_EMPTY;
-#endif
+	ret = get_server_cipher(sval);
+	RETURN_STR(ret);
 }
 
 #define MATH_RETVAL(x)						\
@@ -6332,6 +6432,16 @@ BUILT_IN_FUNCTION(function_perlxcall, input)
 	if (input && *input) GET_STR_ARG(out, input);
 	if (input && *input) GET_INT_ARG(item, input);
 	return perlcall ( sub, in, out, item, input );
+}
+
+#endif
+
+#ifdef TCL
+
+BUILT_IN_FUNCTION(function_tcl, input)
+{
+	extern char* tcleval ( char* );
+	return tcleval ( input );
 }
 
 #endif
@@ -6464,6 +6574,30 @@ BUILT_IN_FUNCTION(function_joinstr, input)
 	return retval;
 }
 
+BUILT_IN_FUNCTION(function_exec, input)
+{
+	char	*ret = NULL, **args = NULL;
+	int	count, *fds, foo;
+	size_t	clue = 0;
+
+	RETURN_IF_EMPTY(input);
+	count = splitw(input, &args);
+	RESIZE(args, void *, count+1);
+	args[count] = NULL;
+
+	if (!count || !args)
+		RETURN_EMPTY;
+
+	fds = open_exec_for_in_out_err(args[0], args);
+	new_free(&args);
+
+	if (fds)
+		for (foo = 0; foo < 3; foo++)
+			m_sc3cat_s(&ret, space, ltoa(fds[foo]), &clue);
+
+	RETURN_MSTR(ret);
+}
+
 /*
  * getserial function:
  * arguments: <type> [...]
@@ -6495,5 +6629,15 @@ BUILT_IN_FUNCTION(function_getserial, input) {
     }
 
     RETURN_EMPTY;
+}
+
+BUILT_IN_FUNCTION(function_timerctl, input)
+{
+	return timerctl(input);
+}
+
+BUILT_IN_FUNCTION(function_dccctl, input)
+{
+	return dccctl(input);
 }
 

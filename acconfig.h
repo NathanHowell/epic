@@ -1,5 +1,5 @@
 /*
- * @(#)$Id: acconfig.h,v 1.18 2002/10/22 23:18:44 jnelson Exp $
+ * @(#)$Id: acconfig.h,v 1.18.2.1 2003/02/27 15:29:54 wd Exp $
  */
 
 /*
@@ -295,4 +295,7 @@
 
 /* Define this if you have a broken realpath */
 #undef HAVE_BROKEN_REALPATH
+
+/* Define this if you have TCL */
+#undef TCL
 

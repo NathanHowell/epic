@@ -1,4 +1,4 @@
-/* $EPIC: input.c,v 1.7 2002/09/26 22:41:43 jnelson Exp $ */
+/* $EPIC: input.c,v 1.7.2.1 2003/02/27 15:29:56 wd Exp $ */
 /*
  * input.c: does the actual input line stuff... keeps the appropriate stuff
  * on the input line, handles insert/delete of characters/words... the whole
@@ -138,14 +138,14 @@ void 	cursor_to_input (void)
 
 /* do_input_timeouts: walk through the list of screens and potentially do
  * timeouts for input */
-void 	do_input_timeouts (void)
+int 	do_input_timeouts (void *ignored)
 {
     Screen *oldscreen = last_input_screen;
     Screen *screen;
     int server;
 
     if (!foreground)
-	return;		/* Not a lot of input.. :) */
+	return 0;		/* Not a lot of input.. :) */
 
     /* I hope this is sufficient to allow input to be processed.  I took
      * a lot of the guts from do_screens().  Here's hoping I didn't
@@ -163,6 +163,7 @@ void 	do_input_timeouts (void)
 	}
     }
     output_screen = last_input_screen = oldscreen;
+    return 0;
 }
 
 /*
@@ -550,6 +551,7 @@ void	set_input (char *str)
 {
 	strmcpy(INPUT_BUFFER + MIN_POS, str, INPUT_BUFFER_SIZE - MIN_POS);
 	THIS_POS = strlen(INPUT_BUFFER);
+	update_input(UPDATE_ALL);
 }
 
 /*
@@ -1319,8 +1321,7 @@ void	edit_char (u_char key)
 		last_input_screen->last_key = handle_keypress(
 			last_input_screen->last_key,
 			last_input_screen->last_press, key);
-		last_input_screen->last_press.tv_sec = now.tv_sec;
-		last_input_screen->last_press.tv_usec = now.tv_usec;
+		get_time(&last_input_screen->last_press);
 	}
 }
 

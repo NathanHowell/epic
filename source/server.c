@@ -1,4 +1,4 @@
-/* $EPIC: server.c,v 1.73 2002/11/08 23:36:13 jnelson Exp $ */
+/* $EPIC: server.c,v 1.73.2.1 2003/02/27 15:29:56 wd Exp $ */
 /*
  * server.c:  Things dealing with that wacky program we call ircd.
  *
@@ -37,8 +37,10 @@
 #define NEED_SERVER_LIST
 #include "irc.h"
 #include "commands.h"
+#include "functions.h"
 #include "alias.h"
 #include "parse.h"
+#include "ssl.h"
 #include "server.h"
 #include "ircaux.h"
 #include "lastlog.h"
@@ -54,9 +56,6 @@
 #include "vars.h"
 #include "newio.h"
 #include "translat.h"
-#ifdef HAVE_SSL
-#include "ssl.h"
-#endif
 
 /*
  * Note to future maintainers -- we do a bit of chicanery here.  The 'flags'
@@ -84,16 +83,18 @@ static	char *	do_umode (int du_index);
 						 * confirmed */
 	int	reconnects_to_hint = 0;		/* XXX Hack.  Don't remind me */
 
+static	char    lame_wait_nick[] = "***LW***";
+static	char    wait_nick[] = "***W***";
 
 /************************ SERVERLIST STUFF ***************************/
 
-	Server	*server_list = (Server *) 0;
+	Server **server_list = (Server **) 0;
 	int	number_of_servers = 0;
 
-	int	primary_server = -1;
-	int	from_server = -1;
-	int	parsing_server_index = -1;
-	int	last_server = -1;
+	int	primary_server = NOSERV;
+	int	from_server = NOSERV;
+	int	parsing_server_index = NOSERV;
+	int	last_server = NOSERV;
 
 
 /*
@@ -106,13 +107,23 @@ static	char *	do_umode (int du_index);
 void 	add_to_server_list (const char *server, int port, const char *password, const char *nick, const char *group, const char *server_type, int overwrite)
 {
 	Server *s;
+	int	i;
 
-	if ((from_server = find_in_server_list(server, port)) == -1)
+	if ((from_server = find_in_server_list(server, port)) == NOSERV)
 	{
-		from_server = number_of_servers++;
-		RESIZE(server_list, Server, number_of_servers);
+		for (i = 0; i < number_of_servers; i++)
+			if (server_list[i] == NULL)
+				break;
 
-		s = &server_list[from_server];
+		if (i == number_of_servers)
+		{
+			from_server = number_of_servers++;
+			RESIZE(server_list, Server *, number_of_servers);
+		}
+		else
+			from_server = i;
+
+		s = server_list[from_server] = new_malloc(sizeof(Server));
 		s->name = m_strdup(server);
 		s->itsname = (char *) 0;
 		s->password = (char *) 0;
@@ -120,7 +131,7 @@ void 	add_to_server_list (const char *server, int port, const char *password, co
 		s->away = (char *) 0;
 		s->version_string = (char *) 0;
 		s->server2_8 = 0;
-		s->oper = 0;
+		s->operator = 0;
 		s->des = -1;
 		s->version = 0;
 		s->flags = 0;
@@ -129,7 +140,7 @@ void 	add_to_server_list (const char *server, int port, const char *password, co
 		s->s_nickname = (char *) 0;
 		s->d_nickname = (char *) 0;
 		s->userhost = (char *) 0;
-		s->connected = 0;
+		s->registered = 0;
 		s->eof = 0;
 		s->port = port;
 		s->who_queue = NULL;
@@ -152,7 +163,7 @@ void 	add_to_server_list (const char *server, int port, const char *password, co
 
 		s->doing_privmsg = 0;
 		s->doing_notice = 0;
-		s->in_ctcp_flag = 0;
+		s->doing_ctcp = 0;
 		s->waiting_in = 0;
 		s->waiting_out = 0;
 		s->start_wait_list = NULL;
@@ -165,10 +176,11 @@ void 	add_to_server_list (const char *server, int port, const char *password, co
 		s->recv_nick = NULL;
 		s->sent_nick = NULL;
 		s->sent_body = NULL;
-#ifdef HAVE_SSL
-		s->enable_ssl = FALSE;
+
+		s->funny_match = NULL;
+
 		s->ssl_enabled = FALSE;
-#endif
+		s->ssl_fd = NULL;
 
 		if (password && *password)
 			malloc_strcpy(&s->password, password);
@@ -178,10 +190,13 @@ void 	add_to_server_list (const char *server, int port, const char *password, co
 			malloc_strcpy(&s->d_nickname, nickname);
 		if (group && *group)
 			malloc_strcpy(&s->group, group);
-#ifdef HAVE_SSL
 		if (server_type && *server_type)
-			s->enable_ssl = my_stricmp(server_type, "IRC-SSL") ? 0 : 1;
-#endif
+		{
+		    if (my_stricmp(server_type, "IRC-SSL") == 0)
+			set_server_try_ssl(from_server, TRUE);
+		    else
+			set_server_try_ssl(from_server, FALSE);
+		}
 		malloc_strcpy(&s->umodes, umodes);
 
 		make_notify_list(from_server);
@@ -190,7 +205,7 @@ void 	add_to_server_list (const char *server, int port, const char *password, co
 	}
 	else
 	{
-		s = &server_list[from_server];
+		s = server_list[from_server];
 
 		if (overwrite)
 		{
@@ -218,10 +233,9 @@ void 	add_to_server_list (const char *server, int port, const char *password, co
 
 static 	void 	remove_from_server_list (int i)
 {
-	Window	*tmp = NULL;
 	Server  *s;
 
-	if (i < 0 || i >= number_of_servers)
+	if (!(s = get_server(i)))
 		return;
 
 	if (number_of_servers == 1)
@@ -232,8 +246,6 @@ static 	void 	remove_from_server_list (int i)
 
 	say("Deleting server [%d]", i);
 	clean_server_queues(i);
-
-	s = &server_list[i];
 	new_free(&s->name);
 	new_free(&s->itsname);
 	new_free(&s->password);
@@ -246,38 +258,31 @@ static 	void 	remove_from_server_list (int i)
 	new_free(&s->userhost);
 	new_free(&s->cookie);
 	new_free(&s->umodes);
-	new_free(&s->ison_queue);
+	new_free(&s->ison_queue);		/* XXX Aren't these free? */
 	new_free(&s->who_queue);
+	new_free(&s->invite_channel);
+	new_free(&s->last_notify_nick);
+	new_free(&s->joined_nick);
+	new_free(&s->public_nick);
+	new_free(&s->recv_nick);
+	new_free(&s->sent_nick);
+	new_free(&s->sent_body);
+	new_free(&s->funny_match);
 	destroy_notify_list(i);
 	destroy_005(i);
 
-#ifdef HAVE_SSL
-	if (server_list[i].ssl_enabled == TRUE)
+	if (get_server_ssl_enabled(i) == TRUE)
 	{
-		SSL_free((SSL *)&s->ssl_fd);
-		SSL_CTX_free((SSL_CTX *)&s->ctx);
-	}
+#ifndef HAVE_SSL
+		panic("Deleting server %d which claims to be using SSL on"
+			"a non-ssl client", i);
+#else
+		SSL_free((SSL *)s->ssl_fd);
+		SSL_CTX_free((SSL_CTX *)s->ctx);
 #endif
-
-	memmove(&server_list[i], &server_list[i + 1], 
-			(number_of_servers - i - 1) * sizeof(Server));
-	number_of_servers--;
-	RESIZE(server_list, Server, number_of_servers);
-
-	/* update all he structs with server in them */
-	channel_server_delete(i);
-	exec_server_delete(i);
-        if (i < primary_server)
-                --primary_server;
-        if (i < from_server)
-                --from_server;
-	while (traverse_all_windows(&tmp))
-	{
-		if (tmp->server > i)
-			tmp->server--;
-		if (tmp->last_server > i)
-			tmp->last_server--;
 	}
+	new_free(&server_list[i]);
+	s = NULL;
 }
 
 
@@ -285,20 +290,23 @@ static 	void 	remove_from_server_list (int i)
 /*
  * Given a hostname and a port number, this function returns the server_list
  * index for that server.  If the specified server is not in the server_list,
- * then -1 is returned.  This function makes an attempt to do smart name
+ * then NOSERV is returned.  This function makes an attempt to do smart name
  * completion so that if you ask for "irc", it returns the first server that
  * has the leading prefix of "irc" in it.
  */
 int	find_in_server_list (const char *server, int port)
 {
+	Server *s;
 	int	i;
-	int	first_idx = -1;
+	int	first_idx = NOSERV;
 
 	for (i = 0; i < number_of_servers; i++)
 	{
+		if (!(s = get_server(i)))
+			continue;
+
 		/* Check the port first.  This is a cheap, easy check */
-		if (port && server_list[i].port && 
-				port != server_list[i].port && port != -1)
+		if (port && s->port && port != s->port && port != -1)
 			continue;
 
 #define MATCH_WITH_COMPLETION(n1, n2) 				\
@@ -320,18 +328,18 @@ int	find_in_server_list (const char *server, int port)
 	{							\
 		if (l2 == l1)					\
 			return i;				\
-		if (first_idx == -1)				\
+		if (first_idx == NOSERV)			\
 			first_idx = i;				\
 	}							\
 }
 
-		MATCH_WITH_COMPLETION(server, server_list[i].name)
-		if (!server_list[i].itsname)
+		MATCH_WITH_COMPLETION(server, s->name)
+		if (!s->itsname)
 			continue;
-		MATCH_WITH_COMPLETION(server, server_list[i].itsname)
+		MATCH_WITH_COMPLETION(server, s->itsname)
 	}
 
-	return first_idx;	/* -1 if server was not found. */
+	return first_idx;	/* NOSERV if server was not found. */
 }
 
 /*
@@ -366,7 +374,7 @@ int 	find_server_refnum (char *server, char **rest)
 	/*
 	 * First of all, check for an existing server refnum
 	 */
-	if ((refnum = parse_server_index(server)) != -1)
+	if ((refnum = parse_server_index(server, 0)) != NOSERV)
 		return refnum;
 
 	/*
@@ -400,20 +408,36 @@ int 	find_server_refnum (char *server, char **rest)
 
 
 /*
- * parse_server_index:  given a string, this checks if it's a number, and if
- * so checks it validity as a server index.  Otherwise -1 is returned 
+ * Parse_server_index:  "Canonicalize" a string that should contain a server
+ * refnum into a server refnum integer that represents said refnum.  
+ *
+ * So if 'str' contains a valid server refnum, return that refnum integer
+ * Otherwise, 'str' is invalid, and return NOSERV, the invalid server refnum.
+ *
+ * However, if 'wantprim' is 1 and 'str' is empty, then return -1, which 
+ * always refers to the from server.  'Wantprim' should be 0 except for
+ * a few special cases.
+ *
+ * You should always and only use this function to convert a string into 
+ * a server refnum.  Fail to do so at your own peril.
  */
-int	parse_server_index (const char *str)
+int	parse_server_index (const char *str, int wantprim)
 {
 	int	i;
+	char	*after = NULL;
 
-	if (is_number(str))
+	if (wantprim && (str == NULL || *str == 0))
+		return -1;
+
+	if (str && is_number(str))
 	{
-		i = atoi(str);
-		if ((i >= 0) && (i < number_of_servers))
-			return (i);
+		i = strtol(str, &after, 10);
+		if (after && *after)
+			return NOSERV;		/* Not a number, sorry. */
+		if (get_server(i))
+			return i;
 	}
-	return (-1);
+	return NOSERV;
 }
 
 
@@ -623,6 +647,7 @@ int 	read_server_file (void)
 /* display_server_list: just guess what this does */
 void 	display_server_list (void)
 {
+	Server *s;
 	int	i;
 
 	if (!server_list)
@@ -631,68 +656,50 @@ void 	display_server_list (void)
 		return;
 	}
 
-	if (from_server != -1)
-		say("Current server: %s %d",
-				server_list[from_server].name,
-				server_list[from_server].port);
+	if (from_server != NOSERV && (s = get_server(from_server)))
+		say("Current server: %s %d", s->name, s->port);
 	else
 		say("Current server: <None>");
 
-	if (primary_server != -1)
-		say("Primary server: %s %d",
-			server_list[primary_server].name,
-			server_list[primary_server].port);
+	if (primary_server != NOSERV && (s = get_server(primary_server)))
+		say("Primary server: %s %d", s->name, s->port);
 	else
 		say("Primary server: <None>");
 
 	say("Server list:");
 	for (i = 0; i < number_of_servers; i++)
 	{
-		if (!server_list[i].nickname)
-		{
-			say("\t%d) %s %d [%s] %s", i,
-				server_list[i].name,
-				server_list[i].port,
-				get_server_group(i),
+		if (!(s = get_server(i)))
+			continue;
+
+		if (!s->nickname)
+			say("\t%d) %s %d [%s] %s", i, s->name, s->port, 
+				get_server_group(i), get_server_type(i));
+		else if (is_server_open(i))
+			say("\t%d) %s %d (%s) [%s] %s", i, s->name, s->port,
+				s->nickname, get_server_group(i),
 				get_server_type(i));
-		}
 		else
-		{
-			if (is_server_open(i))
-				say("\t%d) %s %d (%s) [%s] %s", i,
-					server_list[i].name,
-					server_list[i].port,
-					server_list[i].nickname,
-					get_server_group(i),
-					get_server_type(i));
-			else
-				say("\t%d) %s %d (was %s) [%s] %s", i,
-					server_list[i].name,
-					server_list[i].port,
-					server_list[i].nickname,
-					get_server_group(i),
-					get_server_type(i));
-		}
+			say("\t%d) %s %d (was %s) [%s] %s", i, s->name, 
+				s->port, s->nickname, get_server_group(i),
+				get_server_type(i));
 	}
 }
 
 char *	create_server_list (void)
 {
+	Server	*s;
 	int	i;
 	char	*buffer = NULL;
 	size_t	bufclue = 0;
 
 	for (i = 0; i < number_of_servers; i++)
 	{
-		if (server_list[i].des != -1)
-		{
-			if (server_list[i].itsname)
-				m_sc3cat(&buffer, space, server_list[i].itsname, &bufclue);
-			else
-				yell("Warning: I don't have server #%d's real"
-					"name yet -- using the hostname you "
-					"gave me instead", i);
-		}
+		if (!(s = get_server(i)))
+			continue;
+
+		if (s->des != -1)
+		    m_sc3cat(&buffer, space, get_server_itsname(i), &bufclue);
 	}
 
 	return buffer ? buffer : m_strdup(empty_string);
@@ -714,9 +721,6 @@ BUILT_IN_COMMAND(servercmd)
 {
 	char	*server = NULL;
 	int	i;
-#ifdef HAVE_SSL
-	int     ssl_connect = FALSE;
-#endif
 
 	if ((server = next_arg(args, &args)) == NULL)
 	{
@@ -736,8 +740,8 @@ BUILT_IN_COMMAND(servercmd)
 			return;
 		}
 
-		if ((i = parse_server_index(server)) == -1 &&
-		    (i = find_in_server_list(server, 0)) == -1)
+		if ((i = parse_server_index(server, 0)) == NOSERV &&
+		    (i = find_in_server_list(server, 0)) == NOSERV)
 		{
 			say("No such server in list");
 			return;
@@ -809,7 +813,7 @@ BUILT_IN_COMMAND(servercmd)
 
 			set_server_quit_message(from_server, 
 					"Disconnected at user request");
-			server_reconnects_to(i, -1);
+			server_reconnects_to(i, NOSERV);
 			reconnect(i, 1);
 		}
 		else
@@ -839,12 +843,8 @@ BUILT_IN_COMMAND(servercmd)
 		if (i != j)
 		{
 			clear_reconnect_counts();
-#ifdef HAVE_SSL
 			if (my_stricmp(get_server_type(i), "IRC-SSL") == 0)
-				ssl_connect=TRUE;
-			if (ssl_connect == TRUE)
-				server_list[i].enable_ssl = TRUE;
-#endif
+				set_server_ssl_enabled(i, TRUE);
 
 			server_reconnects_to(j, i);
 			reconnect(j, 0);
@@ -852,7 +852,7 @@ BUILT_IN_COMMAND(servercmd)
 		}
 		else
 			say("Connected to port %d of server %s",
-				server_list[j].port, server_list[j].name);
+				get_server_port(j), get_server_name(j));
 	}
 }
 
@@ -864,8 +864,9 @@ BUILT_IN_COMMAND(servercmd)
  * and and parsed appropriately.  If an EOF is detected from an open server,
  * we call reconnect() to try to keep that server connection alive.
  */
-void	do_server (fd_set *rd)
+void	do_server (fd_set *rd, fd_set *wd)
 {
+	Server *s;
 	char	buffer[IO_BUFFER_SIZE + 1];
 	int	des,
 		i;
@@ -875,28 +876,29 @@ void	do_server (fd_set *rd)
 		int	junk;
 		char 	*bufptr = buffer;
 
-		des = server_list[i].des;
+		if (!(s = get_server(i)))
+			continue;
+
+		des = s->des;
 		if (des == -1 || !FD_ISSET(des, rd))
 		{
-#ifdef HAVE_SSL
-			if (server_list[i].ssl_enabled == TRUE)
+			if (get_server_ssl_enabled(i) == TRUE)
 			{
-				if (!SSL_pending(server_list[i].ssl_fd))
+#ifndef HAVE_SSL
+				panic("do_server on server %d claims to be"
+					"using SSL on non-ssl client", i);
+#else
+				if (!SSL_pending((SSL *)s->ssl_fd))
 					continue;
+#endif
 			}
 			else
-#endif
- 			continue;
+				continue;
 		}
 		FD_CLR(des, rd);	/* Make sure it never comes up again */
 
 		last_server = from_server = i;
-#ifdef HAVE_SSL
-		if (server_list[i].ssl_enabled == TRUE)
-			junk = SSL_dgets(bufptr, des, 1, IO_BUFFER_SIZE, server_list[i].ssl_fd);
-		else
-#endif
-		junk = dgets(bufptr, des, 1);
+		junk = dgets(bufptr, des, 1, s->ssl_fd);
 
 		switch (junk)
  		{
@@ -905,13 +907,13 @@ void	do_server (fd_set *rd)
 
 			case -1:	/* EOF or other error */
 			{
-				if (server_list[i].save_channels == -1)
-					save_server_channels(i);
+				if (s->save_channels == -1)
+					set_server_save_channels(i, 1);
 
-				server_is_connected(i, 0);
+				server_is_registered(i, 0);
 				close_server(i, NULL);
 				say("Connection closed from %s: %s", 
-					server_list[i].name,
+					s->name,
 					(dgets_errno == -1) ? 
 					     "Remote end closed connection" : 
 					     strerror(dgets_errno));
@@ -932,13 +934,13 @@ void	do_server (fd_set *rd)
 
 				if (x_debug & DEBUG_INBOUND)
 					yell("[%d] <- [%s]", 
-						server_list[i].des, buffer);
+						s->des, buffer);
 
 				if (translation)
 					translate_from_server(buffer);
 				parsing_server_index = i;
 				parse_server(buffer);
-				parsing_server_index = -1;
+				parsing_server_index = NOSERV;
 				message_from(NULL, LOG_CRAP);
 				break;
 			}
@@ -947,49 +949,51 @@ void	do_server (fd_set *rd)
 	}
 
 	/* Make sure primary_server is legit before we leave */
-	if (primary_server == -1 || !is_server_connected(primary_server))
+	if (primary_server == NOSERV || !is_server_registered(primary_server))
 		window_check_servers();
 }
 
 
 /* SERVER OUTPUT STUFF */
-static void 	vsend_to_server (const char *format, va_list args);
-void		send_to_server_raw (size_t len, const char *buffer);
+static void 	vsend_to_aserver (int, const char *format, va_list args);
+void		send_to_aserver_raw (int, size_t len, const char *buffer);
 
 void	send_to_aserver (int refnum, const char *format, ...)
 {
-	int old_from_server = from_server;
 	va_list args;
-
-	from_server = refnum;
 	va_start(args, format);
-	vsend_to_server(format, args);
+	vsend_to_aserver(refnum, format, args);
 	va_end(args);
-	from_server = old_from_server;
 }
 
 void	send_to_server (const char *format, ...)
 {
 	va_list args;
+	int	server;
+
+	if ((server = from_server) == NOSERV)
+		server = primary_server;
+
 	va_start(args, format);
-	vsend_to_server(format, args);
+	vsend_to_aserver(server, format, args);
 	va_end(args);
 }
 
 /* send_to_server: sends the given info the the server */
-static void 	vsend_to_server (const char *format, va_list args)
+static void 	vsend_to_aserver (int refnum, const char *format, va_list args)
 {
+	Server *s;
 	char	buffer[BIG_BUFFER_SIZE * 11 + 1]; /* make this buffer *much*
 						  * bigger than needed */
 	size_t	size = BIG_BUFFER_SIZE * 11;
 	int	len,
 		des;
-	int	server;
+	int	ofs;
 
-	if ((server = from_server) == -1)
-		server = primary_server;
+	if (!(s = get_server(refnum)))
+		return;
 
-	if (server != -1 && (des = server_list[server].des) != -1 && format)
+	if (refnum != NOSERV && (des = s->des) != -1 && format)
 	{
 		/* Keep the results short, and within reason. */
 		len = vsnprintf(buffer, BIG_BUFFER_SIZE, format, args);
@@ -1004,83 +1008,82 @@ static void 	vsend_to_server (const char *format, va_list args)
 				yell("mangle_line truncated results!  Ick.");
 		}
 
-		server_list[server].sent = 1;
+		s->sent = 1;
 		if (len > (IRCD_BUFFER_SIZE - 2) || len == -1)
 			buffer[IRCD_BUFFER_SIZE - 2] = 0;
 		if (x_debug & DEBUG_OUTBOUND)
 			yell("[%d] -> [%s]", des, buffer);
 		strmcat(buffer, "\r\n", IRCD_BUFFER_SIZE);
-		if (do_hook(SEND_TO_SERVER_LIST, "%d %d %s", 
-				server, des, buffer))
-		{
-			send_to_server_raw (strlen(buffer), buffer);
-		}
+
+		/* This "from_server" hack is for the benefit of do_hook. */
+		ofs = from_server;
+		from_server = refnum;
+		if (do_hook(SEND_TO_SERVER_LIST, "%d %d %s", from_server, des, buffer))
+			send_to_aserver_raw(refnum, strlen(buffer), buffer);
+		from_server = ofs;
 	}
-	else if (from_server == -1)
+	else if (from_server == NOSERV)
         {
-	    if (do_hook(DISCONNECT_LIST,"No Connection to %d", server))
+	    if (do_hook(DISCONNECT_LIST,"No Connection to %d", refnum))
 		say("You are not connected to a server, "
 			"use /SERVER to connect.");
         }
 }
 
-void	send_to_server_raw (size_t len, const char *buffer)
+void	send_to_aserver_raw (int refnum, size_t len, const char *buffer)
 {
-	int des, server;
+	Server *s;
+	int des;
 	int err = 0;
 
-	if ((server = from_server) == -1)
-		server = primary_server;
+	if (!(s = get_server(refnum)))
+		return;
 
-	if (server != -1 && (des = server_list[server].des) != -1 && buffer)
+	if ((des = s->des) != -1 && buffer)
 	{
-#ifdef HAVE_SSL
-		if (server_list[server].ssl_enabled == TRUE)
+	    if (get_server_ssl_enabled(refnum) == TRUE)
+	    {
+#ifndef HAVE_SSL
+		panic("send_to_aserver_raw: Server %d claims to "
+			"be using SSL on a non-ssl client", refnum);
+#else
+		if (s->ssl_fd == NULL)
 		{
-			if (server_list[server].ssl_fd == 0)
-			{
-				say("SSL write error - ssl socket=0");
-				return;
-			}
-			err = SSL_write(server_list[server].ssl_fd, buffer, strlen(buffer));
-			BIO_flush(SSL_get_wbio(server_list[server].ssl_fd));
+			say("SSL write error - ssl socket = 0");
+			return;
 		}
-		else
-#endif 
+		err = SSL_write((SSL *)s->ssl_fd, buffer, strlen(buffer));
+		BIO_flush(SSL_get_wbio((SSL *)s->ssl_fd));
+#endif
+	    }
+	    else
 		err = write(des, buffer, strlen(buffer));
 
-		if (err == -1 &&
-			(!get_int_var(NO_FAIL_DISCONNECT_VAR)))
+	    if (err == -1 && (!get_int_var(NO_FAIL_DISCONNECT_VAR)))
+	    {
+		if (is_server_registered(refnum))
 		{
-			if (server_list[server].connected)
-			{
-				/* server_list[server].save_channels == 1; */
-				/* close_server(server, strerror(errno));  */
-				server_is_connected(des, 0);
-				say("Write to server failed.  Closing connection.");
-#ifdef HAVE_SSL
-				if (server_list[server].ssl_enabled == TRUE)
-					SSL_shutdown(server_list[server].ssl_fd);
+			/* s->save_channels == 1; */
+			/* close_server(server, strerror(errno));  */
+			server_is_registered(des, 0);
+			say("Write to server failed.  Closing connection.");
+			if (get_server_ssl_enabled(refnum) == TRUE)
+#ifndef HAVE_SSL
+			    panic("send_to_aserver_raw: Closing server %d "
+				  "which claims to be using SSL on non-ssl "
+				  "client", refnum);
+#else
+				SSL_shutdown((SSL *)s->ssl_fd);
 #endif
-				reconnect(server, 1);
-			}
+			reconnect(refnum, 1);
 		}
+	    }
 	}
-}
-
-void	clear_sent_to_server (int servnum)
-{
-	server_list[servnum].sent = 0;
-}
-
-int	sent_to_server (int servnum)
-{
-	return server_list[servnum].sent;
 }
 
 void	flush_server (int servnum)
 {
-	if (!is_server_connected(servnum))
+	if (!is_server_registered(servnum))
 		return;
 	set_server_redirect(servnum, "0");
 	send_to_aserver(servnum, "%s", "***0");
@@ -1105,14 +1108,12 @@ static int 	connect_to_server (int new_server)
 	/*
 	 * Can't connect to refnum -1, this is definitely an error.
 	 */
-	if (new_server < 0)
+	if (!(s = get_server(new_server)))
 	{
 		say("Connecting to refnum %d.  That makes no sense.", 
 			new_server);
 		return -1;		/* XXXX */
 	}
-
-	s = &server_list[new_server];
 
 	/*
 	 * If we are already connected to the new server, go with that.
@@ -1121,7 +1122,7 @@ static int 	connect_to_server (int new_server)
 	{
 		say("Connected to port %d of server %s", s->port, s->name);
 		from_server = new_server;
-		return -2;		/* Server is already connected */
+		return -3;		/* Server is already connected */
 	}
 
 	/*
@@ -1141,11 +1142,17 @@ static int 	connect_to_server (int new_server)
 		if (x_debug & DEBUG_SERVER_CONNECT)
 			say("new_des is %d", des);
 
-		say("Unable to connect to port %d of server %s: [%d] %s", 
+		if ((s = get_server(new_server)))
+		{
+		    say("Unable to connect to port %d of server %s: [%d] %s", 
 				s->port, s->name, des, my_strerror(errno));
-#ifdef HAVE_SSL
-		s->ssl_enabled = FALSE; /* Would cause client to crash, if not wiped out */
-#endif
+
+		    /* Would cause client to crash, if not wiped out */
+		    set_server_ssl_enabled(new_server, FALSE);
+		}
+		else
+			say("Unable to connect to server.");
+
 		return -1;		/* Connect failed */
 	}
 
@@ -1168,7 +1175,7 @@ static int 	connect_to_server (int new_server)
 	 */
 	add_to_server_list(s->name, s->port, NULL, NULL, NULL, NULL, 1);
 	s->des = des;
-	s->oper = 0;
+	s->operator = 0;
 	if (!s->d_nickname)
 		malloc_strcpy(&s->d_nickname, nickname);
 
@@ -1185,16 +1192,17 @@ static int 	connect_to_server (int new_server)
 /*
  * This attempts to substitute a new connection to server 'new_server'
  * for the server connection 'old_server'.
- * If 'old_server' is -1, then this is the first connection for the entire
+ * If 'old_server' is NOSERV, then this is the first connection for the entire
  * 	client.  We have to handle this differently because no windows exist
  *	at this point and we have to be careful not to call 
  *	window_check_servers.
- * If 'old_server' is -2, then this is a new server connection on an existing
+ * If 'new_conn' is 1, then this is a new server connection on an existing
  * 	window.  This is used when a window "splits off" from an existing
  *	server connection to a new server.
  */
 int 	connect_to_new_server (int new_server, int old_server, int new_conn)
 {
+	Server *s;
 	int	x;
 	int	old;
 
@@ -1202,13 +1210,12 @@ int 	connect_to_new_server (int new_server, int old_server, int new_conn)
 	 * First of all, if we can't connect to the new server, we don't
 	 * do anything here.  Note that this might succeed because we are
 	 * already connected to the new server, in which case 
-	 * 'is_server_connected' should be true.
+	 * 'is_server_registered' should be true.
 	 */
 	if ((x = connect_to_server(new_server)) == -1)
 	{
-		if (old_server >= 0 && server_list[old_server].des != -1)
-			say("Connection to server %s resumed...", 
-				server_list[old_server].name);
+		if (old_server != NOSERV && (s = get_server(old_server)) && s->des != -1)
+			say("Connection to server %s resumed...", s->name);
 
 		return -1;
 	}
@@ -1224,7 +1231,11 @@ int 	connect_to_new_server (int new_server, int old_server, int new_conn)
 	 * go ahead and register it.
 	 */
 	if (x == 0)
-		register_server(new_server, server_list[new_server].d_nickname);
+	{
+		if (!(s = get_server(new_server)))
+			return -1;
+		register_server(new_server, s->d_nickname);
+	}
 
 	/*
 	 * If we're not actually switching servers...
@@ -1236,7 +1247,7 @@ int 	connect_to_new_server (int new_server, int old_server, int new_conn)
 		 * already connected to, then there's nothing more
 		 * to be done, eh?
 		 */
-		if (x == -2)
+		if (x == -3)
 			return 0;
 
 		/*
@@ -1263,7 +1274,7 @@ int 	connect_to_new_server (int new_server, int old_server, int new_conn)
 		 */
 		if (is_server_open(old_server))
 		{
-			save_server_channels(old_server);
+			set_server_save_channels(old_server, 1);
 			close_server(old_server, "changing servers");
 		}
 
@@ -1275,7 +1286,7 @@ int 	connect_to_new_server (int new_server, int old_server, int new_conn)
 		 * phantom channels in the future.  Otherwise, if we are
 		 * establishing a brand new connection, we 
 		 */
-		if (x == -2)
+		if (x == -3)
 		{
 			destroy_waiting_channels(old_server);
 			destroy_server_channels(old_server);
@@ -1290,15 +1301,15 @@ int 	connect_to_new_server (int new_server, int old_server, int new_conn)
 			change_server_channels(old_server, new_server);
 
 		/*
-		 * If 'new_conn' is 0, and 'old_server' is -1, then we're
+		 * If 'new_conn' is 0, and 'old_server' is NOSERV, then we're
 		 * doing something like a /server in a disconnected window.
 		 * That's no sweat.  We will just try to figure out what
 		 * server this window was last connected to, and move all
 		 * of those windows over to this new server.
 		 */
-		if (old_server == -1)
+		if (old_server == NOSERV)
 		{
-			if (!(old = get_window_oldserver(0)) != -1)
+			if (!(old = get_window_oldserver(0)) != NOSERV)
 				old_server = old;
 		}
 
@@ -1339,7 +1350,7 @@ int 	connect_to_new_server (int new_server, int old_server, int new_conn)
  * circumstances, this function is called to figure out what to do.
  *
  * Use the function "server_reconnects_to" to control how this function
- * behaves.  Setting the reconnecting server to -1 inhibits any connection
+ * behaves.  Setting the reconnecting server to NOSERV inhibits any connection
  * from occuring upon EOF.  Setting the reconnecting server to itself causes
  * a normal reconnect act.  Setting the reconnecting server to another refnum
  * causes the server connection to be migrated to that refnum.  The original
@@ -1353,10 +1364,11 @@ int 	connect_to_new_server (int new_server, int old_server, int new_conn)
  */
 int	reconnect (int oldserv, int samegroup)
 {
+	Server *s;
 	int	newserv;
 	int	i, j;
-	int	was_connected = 0;
-	int	connected;
+	int	was_registered = 0;
+	int	registered;
 	int	max_reconnects = get_int_var(MAX_RECONNECTS_VAR);
 
 	if (!server_list)
@@ -1366,34 +1378,36 @@ int	reconnect (int oldserv, int samegroup)
 		return -1;
 	}
 
-	if (oldserv >= 0 && oldserv < number_of_servers)
+	if (oldserv == NOSERV)
 	{
-		was_connected = is_server_connected(oldserv);
-		newserv = server_list[oldserv].reconnect_to;
+		newserv = reconnects_to_hint;
+		registered = 0;
+	}
+	else
+	{
+		if (!(s = get_server(oldserv)))
+			return -1;
+		was_registered = is_server_registered(oldserv);
+		newserv = s->reconnect_to;
 
 		/*
 		 * Inhibit automatic reconnections.
 		 */
-		if (!was_connected && newserv == oldserv &&
+		if (!was_registered && newserv == oldserv &&
 				get_int_var(AUTO_RECONNECT_VAR) == 0)
-			newserv = -1;
+			newserv = NOSERV;
 
-		if (newserv != -1)
-			save_server_channels(oldserv);
+		if (newserv != NOSERV)
+			set_server_save_channels(oldserv, 1);
 		else
-			dont_save_server_channels(oldserv);
+			set_server_save_channels(oldserv, 0);
 
-		if (newserv == oldserv || newserv == -1)
+		if (newserv == oldserv || newserv == NOSERV)
 			close_server(oldserv, get_server_quit_message(oldserv));
-		connected = is_server_connected(oldserv);
-	}
-	else
-	{
-		newserv = reconnects_to_hint;
-		connected = 0;
+		registered = is_server_registered(oldserv);
 	}
 
-	if (newserv < 0)
+	if (newserv == NOSERV)
 	{
 		window_check_servers();
 		return -1;		/* User wants to disconnect */
@@ -1403,13 +1417,15 @@ int	reconnect (int oldserv, int samegroup)
 	for (i = 0; i < number_of_servers; i++)
 	{
 		j = (i + newserv) % number_of_servers;
-		if (samegroup && oldserv >= 0 &&
+		if (!(s = get_server(j)))
+			continue;
+		if (samegroup && oldserv != NOSERV &&
 			my_stricmp(get_server_group(oldserv), 
 				   get_server_group(j)))
 			continue;
 		if (newserv != oldserv && j == oldserv)
 			continue;
-		if (server_list[j].reconnects++ > max_reconnects) {
+		if (s->reconnects++ > max_reconnects) {
 			say("Auto-reconnect has been throttled because too many unsuccessfull attempts to connect to server %d have been performed.", j);
 			break;
 		}
@@ -1427,17 +1443,17 @@ int	reconnect (int oldserv, int samegroup)
 		 * which case we just keep cycling our servers until we find
 		 * some place we like.
 		 */
-		if (connected)
+		if (registered)
 			break;
 	}
 
 	/* If we reach this point, we have failed.  Time to punt */
 
 	/*
-	 * If our prior state was connected, revert back to the prior
-	 * connected server.
+	 * If our prior state was registered, revert back to the prior
+	 * registered server.
 	 */
-	if (connected && newserv != oldserv)
+	if (registered && newserv != oldserv)
 	{
 		say("A new server connection could not be established.");
 		say("Your previous server connection will be resumed.");
@@ -1447,17 +1463,17 @@ int	reconnect (int oldserv, int samegroup)
 	}
 
 	/*
-	 * In any situation, if 'oldserv' is not connected at this point, 
+	 * In any situation, if 'oldserv' is not registered at this point, 
 	 * then we need to throw away it's channels.
 	 */
-	if (!is_server_connected(oldserv))
+	if (!is_server_registered(oldserv))
 	{
 		destroy_waiting_channels(oldserv);
 		destroy_server_channels(oldserv);
 	}
 
 	/*
-	 * Our prior state was unconnected.  Tell the user
+	 * Our prior state was unregistered.  Tell the user
 	 * that we give up and tough luck.
 	 */
 	if (do_hook(DISCONNECT_LIST, "Unable to connect to a server"))
@@ -1476,7 +1492,7 @@ int 	close_all_servers (const char *message)
 	for (i = 0; i < number_of_servers; i++)
 	{
 		set_server_quit_message(i, message);
-		server_reconnects_to(i, -1);
+		server_reconnects_to(i, NOSERV);
 		reconnect(i, 0);
 	}
 
@@ -1489,85 +1505,77 @@ int 	close_all_servers (const char *message)
  * than the NULL or the empty_string, it will send a protocol QUIT message
  * to the server before closing the connection.
  */
-void	close_server (int old, const char *message)
+void	close_server (int refnum, const char *message)
 {
-	int	was_connected;
+	Server *s;
+	int	was_registered;
 
 	/* Make sure server refnum is valid */
-	if (old < 0 || old >= number_of_servers)
+	if (!(s = get_server(refnum)))
 	{
-		yell("Closing server [%d] makes no sense!", old);
+		yell("Closing server [%d] makes no sense!", refnum);
 		return;
 	}
 
-	was_connected = server_list[old].connected;
+	was_registered = is_server_registered(refnum);
 
-	clean_server_queues(old);
-	if (waiting_out > waiting_in)		/* XXX - hack! */
-		waiting_out = waiting_in = 0;
+	clean_server_queues(refnum);
+	if (s->waiting_out > s->waiting_in)		/* XXX - hack! */
+		s->waiting_out = s->waiting_in = 0;
 
-	if (server_list[old].save_channels == 1)
-		save_channels(old);
-	else if (server_list[old].save_channels == 0)
+	if (s->save_channels == 1)
+		save_channels(refnum);
+	else if (s->save_channels == 0)
 	{
-		destroy_waiting_channels(old);
-		destroy_server_channels(old);
+		destroy_waiting_channels(refnum);
+		destroy_server_channels(refnum);
 	}
 	else
-		panic("Somebody forgot to set "
-			"server_list[%d].save_channels!", old);
+		panic("Somebody forgot to set save_channels for server %d", refnum);
 
-	server_list[old].save_channels = -1;
-	server_list[old].oper = 0;
-	server_list[old].registration_pending = 0;
-	server_list[old].connected = 0;
-	server_list[old].rejoined_channels = 0;
-	new_free(&server_list[old].nickname);
-	new_free(&server_list[old].s_nickname);
+	s->save_channels = -1;
+	s->operator = 0;
+	s->registration_pending = 0;
+	s->registered = 0;
+	s->rejoined_channels = 0;
+	new_free(&s->nickname);
+	new_free(&s->s_nickname);
 
-	if (server_list[old].des != -1)
+	if (s->des != -1)
 	{
-		if (message && *message && !server_list[old].closing)
+		if (message && *message && !s->closing)
 		{
-		    server_list[old].closing = 1;
+		    s->closing = 1;
 		    if (x_debug & DEBUG_OUTBOUND)
 			yell("Closing server %d because [%s]", 
-			   old, message ? message : empty_string);
+			   refnum, message ? message : empty_string);
 
 		    /*
 		     * Only tell the server we are leaving if we are 
 		     * registered.  This avoids an infinite loop in the
 		     * D-line case.
 		     */
-		    if (was_connected)
-			    send_to_aserver(old, "QUIT :%s\n", message);
-#ifdef HAVE_SSL
-		    if (server_list[old].ssl_enabled == TRUE)
+		    if (was_registered)
+			    send_to_aserver(refnum, "QUIT :%s\n", message);
+		    if (get_server_ssl_enabled(refnum) == TRUE)
 		    {
-			    say("Closing SSL connection");
-			    SSL_shutdown(server_list[old].ssl_fd);
-		    }
+#ifndef HAVE_SSL
+			panic("close_server: Server %d claims to be using "
+			      "ssl on a non-ssl client", refnum);
+#else
+			say("Closing SSL connection");
+			SSL_shutdown((SSL *)s->ssl_fd);
 #endif
+		    }
 		    do_hook(SERVER_LOST_LIST, "%d %s %s", 
-				old, server_list[old].name, message);
+				refnum, s->name, message);
 		}
 
-		server_list[old].des = new_close(server_list[old].des);
+		s->des = new_close(s->des);
 	}
 
 	return;
 }
-
-void 	save_server_channels (int servnum)
-{
-	server_list[servnum].save_channels = 1;
-}
-
-void	dont_save_server_channels (int servnum)
-{
-	server_list[servnum].save_channels = 0;
-}
-
 
 /********************* OTHER STUFF ************************************/
 
@@ -1576,329 +1584,301 @@ void	dont_save_server_channels (int servnum)
  * Encapsulates everything we need to change our AWAY status.
  * This improves greatly on having everyone peek into that member.
  * Also, we can deal centrally with someone changing their AWAY
- * message for a server when we're not connected to that server
+ * message for a server when we're not registered to that server
  * (when we do connect, then we send out the AWAY command.)
  * All this saves a lot of headaches and crashes.
  */
-void	set_server_away (int servnum, const char *message)
+void	set_server_away (int refnum, const char *message)
 {
-	if (servnum == -1)
-		say("You are not connected to a server.");
+	Server *s;
 
-	else if (message && *message)
+	if (!(s = get_server(refnum)))
 	{
-		if (server_list[servnum].away != message)
-			malloc_strcpy(&server_list[servnum].away, message);
-		if (server_list[servnum].connected)
-			send_to_aserver(servnum, "AWAY :%s", message);
+		say("You are not connected to a server.");
+		return;
+	}
+
+	if (message && *message)
+	{
+		if (!s->away || !strcmp(s->away, message))
+			malloc_strcpy(&s->away, message);
+		if (is_server_registered(refnum))
+			send_to_aserver(refnum, "AWAY :%s", message);
 	}
 	else
 	{
-		new_free(&server_list[servnum].away);
-		if (server_list[servnum].connected)
-			send_to_aserver(servnum, "AWAY :");
+		new_free(&s->away);
+		if (is_server_registered(refnum))
+			send_to_aserver(refnum, "AWAY :");
 	}
 }
 
-const char *	get_server_away (int gsa_index)
+const char *	get_server_away (int refnum)
 {
-	if (gsa_index == -2)
+	Server *s;
+
+	if (refnum == NOSERV)
 	{
 		int	i;
+
 		for (i = 0; i < number_of_servers; i++)
 		{
-			if (server_list[i].connected && server_list[i].away)
-				return server_list[i].away;
+			if (!(s = get_server(i)))
+				continue;
+
+			if (is_server_registered(i) && s->away)
+				return s->away;
 		}
-		return 0;
+
+		return NULL;
 	}
-	if (gsa_index < 0 || gsa_index >= number_of_servers)
+
+	if (!(s = get_server(refnum)))
 		return NULL;
 	
-	return server_list[gsa_index].away;
+	return s->away;
 }
 
 
 /* USER MODES */
-static char *do_umode (int du_index)
+static char *do_umode (int refnum)
 {
-	char *c = server_list[du_index].umode;
-	long flags = server_list[du_index].flags;
-	long flags2 = server_list[du_index].flags2;
-	int i;
+	Server *s;
+	char *c;
+	long flags, flags2, i;
 
-	for (i = 0; server_list[du_index].umodes[i]; i++)
+	if (!(s = get_server(refnum)))
+		return empty_string;
+
+	c = s->umode;
+	flags = s->flags;
+	flags2 = s->flags2;
+
+	for (i = 0; s->umodes[i]; i++)
 	{
 		if (i > 31)
 		{
 			if (flags2 & (0x1 << (i - 32)))
-				*c++ = server_list[du_index].umodes[i];
+				*c++ = s->umodes[i];
 		}
 		else
 		{
 			if (flags & (0x1 << i))
-				*c++ = server_list[du_index].umodes[i];
+				*c++ = s->umodes[i];
 		}
 	}
 
-	*c = '\0';
-	return server_list[du_index].umode;
+	*c = 0;
+	return s->umode;
 }
 
-const char *	get_possible_umodes (int gu_index)
+const char *	get_possible_umodes (int refnum)
 {
-	if (gu_index == -1)
-		gu_index = primary_server;
-	else if (gu_index >= number_of_servers)
+	Server *s;
+
+	if (!(s = get_server(refnum)))
 		return empty_string;
 
-	return server_list[gu_index].umodes;
+	return s->umodes;
 }
 
-void set_possible_umodes (int gu_index, const char *umodes)
+void	set_possible_umodes (int refnum, const char *umodes)
 {
-	if (gu_index == -1)
-		gu_index = primary_server;
-	else if (gu_index >= number_of_servers)
+	Server *s;
+
+	if (!(s = get_server(refnum)))
 		return;
 
-	malloc_strcpy(&server_list[gu_index].umodes, umodes);
+	malloc_strcpy(&s->umodes, umodes);
 }
 
-const char *	get_umode (int gu_index)
+const char *	get_umode (int refnum)
 {
-	if (gu_index == -1)
-		gu_index = primary_server;
-	else if (gu_index >= number_of_servers)
+	Server *s;
+
+	if (!(s = get_server(refnum)))
 		return empty_string;
 
-	return server_list[gu_index].umode;
+	return s->umode;
 }
 
-void 	clear_user_modes (int gindex)
+void 	clear_user_modes (int refnum)
 {
-	if (gindex == -1)
-		gindex = primary_server;
-	else if (gindex >= number_of_servers)
+	Server *s;
+
+	if (!(s = get_server(refnum)))
 		return;
 
-	server_list[gindex].flags = 0;
-	server_list[gindex].flags2 = 0;
-	do_umode(gindex);
+	s->flags = 0;
+	s->flags2 = 0;
+	do_umode(refnum);
 }
 
-void	set_server_flag (int ssf_index, int flag, int value)
+void	update_user_mode (const char *modes)
 {
-	if (ssf_index == -1)
-		ssf_index = primary_server;
-	else if (ssf_index >= number_of_servers)
+	int		onoff = 1;
+	const char *	p_umodes = get_possible_umodes(from_server);
+
+	if (x_debug & DEBUG_SERVER_CONNECT)
+		yell("Possible user modes for server [%d]: [%s]", from_server, p_umodes);
+
+	for (; *modes; modes++)
+	{
+		if (*modes == '-')
+			onoff = 0;
+		else if (*modes == '+')
+			onoff = 1;
+
+		else if   ((*modes >= 'a' && *modes <= 'z')
+			|| (*modes >= 'A' && *modes <= 'Z'))
+		{
+			size_t 	idx;
+			int 	c = *modes;
+
+			idx = ccspan(p_umodes, c);
+			if (p_umodes && p_umodes[idx] == 0)
+				yell("WARNING: Invalid user mode %c referenced on server %d",
+						*modes, last_server);
+			else
+				set_server_flag(from_server, idx, onoff);
+
+			if (c == 'O' || c == 'o')
+				set_server_operator(from_server, onoff);
+		}
+	}
+	update_all_status();
+}
+
+void	reinstate_user_modes (void)
+{
+	const char *modes = get_umode(from_server);
+
+	if (!modes && !*modes)
+		modes = send_umode;
+
+	if (modes && *modes)
+	{
+		if (x_debug & DEBUG_OUTBOUND)
+			yell("Reinstating your user modes on server [%d] to [%s]", from_server, modes);
+		send_to_server("MODE %s +%s", get_server_nickname(from_server), modes);
+		clear_user_modes(from_server);
+	}
+}
+
+void	set_server_flag (int refnum, int flag, int value)
+{
+	Server *s;
+
+	if (!(s = get_server(refnum)))
 		return;
 
 	if (flag > 31)
 	{
 		if (value)
-			server_list[ssf_index].flags2 |= 0x1 << (flag - 32);
+			s->flags2 |= 0x1 << (flag - 32);
 		else
-			server_list[ssf_index].flags2 &= ~(0x1 << (flag - 32));
+			s->flags2 &= ~(0x1 << (flag - 32));
 	}
 	else
 	{
 		if (value)
-			server_list[ssf_index].flags |= 0x1 << flag;
+			s->flags |= 0x1 << flag;
 		else
-			server_list[ssf_index].flags &= ~(0x1 << flag);
+			s->flags &= ~(0x1 << flag);
 	}
 
-	do_umode(ssf_index);
+	do_umode(refnum);
 }
 
-int	get_server_flag (int gsf_index, int value)
+int	get_server_flag (int refnum, int value)
 {
-	if (gsf_index == -1)
-		gsf_index = primary_server;
-	else if (gsf_index >= number_of_servers)
+	Server *s;
+
+	if (!(s = get_server(refnum)))
 		return 0;
 
 	if (value > 31)
-		return server_list[gsf_index].flags2 & (0x1 << (value - 32));
+		return s->flags2 & (0x1 << (value - 32));
 	else
-		return server_list[gsf_index].flags & (0x1 << value);
+		return s->flags & (0x1 << value);
 }
 
-/* SERVER VERSIONS */
-/*
- * set_server_version: Sets the server version for the given server type.  A
- * zero version means pre 2.6, a one version means 2.6 aso. (look server.h
- * for typedef)
- */
-void	set_server_version (int ssv_index, int version)
-{
-	if (ssv_index == -1)
-		ssv_index = primary_server;
-	else if (ssv_index >= number_of_servers)
-		return;
-	server_list[ssv_index].version = version;
-}
-
-/*
- * get_server_version: returns the server version value for the given server
- * index 
- */
-int	get_server_version (int gsv_index)
-{
-	if (gsv_index == -1)
-		gsv_index = primary_server;
-	else if (gsv_index >= number_of_servers)
-		return 0;
-
-	return (server_list[gsv_index].version);
-}
-
-/* SERVER NAMES */
-/* get_server_name: returns the name for the given server index */
-const char	*get_server_name (int gsn_index)
-{
-	if (gsn_index == -1)
-		gsn_index = primary_server;
-	else if (gsn_index == -1 || gsn_index >= number_of_servers)
-		return empty_string;
-
-	return (server_list[gsn_index].name);
-}
-
-/* get_server_itsname: returns the server's idea of its name */
-const char	*get_server_itsname (int gsi_index)
-{
-	if (gsi_index==-1)
-		gsi_index=primary_server;
-	else if (gsi_index >= number_of_servers)
-		return empty_string;
-
-	/* better check gsi_index for -1 here CDE */
-	if (gsi_index == -1)
-		return empty_string;
-
-	if (server_list[gsi_index].itsname)
-		return server_list[gsi_index].itsname;
-	else
-		return server_list[gsi_index].name;
-}
-
-void	set_server_name (int ssi_index, const char *name)
-{
-	if (ssi_index==-1)
-		ssi_index=primary_server;
-	else if (ssi_index >= number_of_servers)
-		return;
-
-	malloc_strcpy(&server_list[ssi_index].name, name);
-}
-
-void	set_server_itsname (int ssi_index, const char *name)
-{
-	if (ssi_index==-1)
-		ssi_index=primary_server;
-	else if (ssi_index >= number_of_servers)
-		return;
-
-	malloc_strcpy(&server_list[ssi_index].itsname, name);
-}
-
-void	set_server_version_string (int servnum, const char *ver)
-{
-	malloc_strcpy(&server_list[servnum].version_string, ver);
-}
-
-const char *	get_server_version_string (int servnum)
-{
-	 return server_list[servnum].version_string;
-}
-
-#ifdef HAVE_SSL
-
-int	get_server_enable_ssl (int gsn_index)
-{
-	return server_list[gsn_index].enable_ssl;
-}
-
-void	set_server_enable_ssl (int gsn_index, int value)
-{
-	server_list[gsn_index].enable_ssl = value;
-}
 
 /* get_server_isssl: returns 1 if the server is using SSL connection */
-int	get_server_isssl (int gsn_index)
+int	get_server_isssl (int refnum)
 {
-	if (gsn_index == -1)
-		gsn_index = primary_server;
-	else if (gsn_index == -1 || gsn_index >= number_of_servers)
+	Server *s;
+
+	if (!(s = get_server(refnum)))
 		return 0;
 
-	return ((server_list[gsn_index].ssl_enabled == TRUE) ? (1) : (0));
+	return (s->ssl_enabled == TRUE ? 1 : 0);
 }
 
-const char	*get_server_cipher (int gsn_index)
+const char	*get_server_cipher (int refnum)
 {
-	if (gsn_index == -1)
-		gsn_index = primary_server;
-	else if (gsn_index == -1 || gsn_index >= number_of_servers
-		|| server_list[gsn_index].ssl_enabled == FALSE)
+	Server *s;
+
+	if (!(s = get_server(refnum)) || s->ssl_enabled == FALSE)
 		return empty_string;
 
-	return (SSL_get_cipher(server_list[gsn_index].ssl_fd));
-}
-
+#ifndef HAVE_SSL
+	return empty_string;
 #else
-
-/* get_server_isssl: returns 1 if the server is using SSL connection */
-int	get_server_isssl (int gsn_index)
-{
-	return 0;
-}
+	return SSL_get_cipher((SSL *)s->ssl_fd);
 #endif
+}
+
 
 /* CONNECTION/REGISTRATION STATUS */
-void	register_server (int ssn_index, const char *nickname)
+void	register_server (int refnum, const char *nickname)
 {
-#ifdef HAVE_SSL
-	char*		cert_issuer;
-	char*		cert_subject;
-	X509		*server_cert;
-	EVP_PKEY	*server_pkey;
-#endif
-	if (server_list[ssn_index].registration_pending)
+	Server *	s;
+
+	if (!(s = get_server(refnum)))
+		return;
+
+	if (s->registration_pending)
 		return;		/* Whatever */
 
-	if (server_list[ssn_index].connected)
+	if (is_server_registered(refnum))
 		return;		/* Whatever */
 
 	do_hook(SERVER_ESTABLISHED_LIST, "%s %d",
-		get_server_name(from_server), get_server_port(from_server));
+		get_server_name(refnum), get_server_port(refnum));
 
-	server_list[ssn_index].registration_pending = 1;
-#ifdef HAVE_SSL
-	if (server_list[ssn_index].enable_ssl == TRUE)
+	s->registration_pending = 1;
+	if (get_server_try_ssl(refnum) == TRUE)
 	{
+#ifndef HAVE_SSL
+		panic("register_server on server %d claims to be doing"
+			"SSL on a non-ssl client.", refnum);
+#else
+		char *		cert_issuer;
+		char *		cert_subject;
+		X509 *		server_cert;
+		EVP_PKEY *	server_pkey;
+
 		say("SSL negotiation in progress...");
 		/* Set up SSL connection */
-		server_list[ssn_index].ctx = SSL_CTX_init(0);
-		server_list[ssn_index].ssl_fd = SSL_FD_init(server_list[ssn_index].ctx,
-			server_list[ssn_index].des);
+		s->ctx = SSL_CTX_init(0);
+		s->ssl_fd = (void *)SSL_FD_init(s->ctx, s->des);
 
 		if (x_debug & DEBUG_SSL)
 			say("SSL negotiation using %s",
-				get_server_cipher(ssn_index));
+				get_server_cipher(refnum));
 		say("SSL negotiation on port %d of server %s complete",
-			server_list[ssn_index].port, get_server_name(ssn_index));
-		server_cert = SSL_get_peer_certificate(server_list[ssn_index].ssl_fd);
+			s->port, get_server_name(refnum));
+		server_cert = SSL_get_peer_certificate((SSL *)s->ssl_fd);
 
 		if (!server_cert) {
 			say ("SSL negotiation failed");
 			say ("WARNING: Bailing to no encryption");
-			SSL_CTX_free((SSL_CTX *)&server_list[ssn_index].ctx);
-			send_to_aserver(ssn_index, "%s", empty_string);
+			SSL_CTX_free((SSL_CTX *)s->ctx);
+			send_to_aserver(refnum, "%s", empty_string);
 		} else {
 			char *u_cert_subject, *u_cert_issuer;
+
 			cert_subject = X509_NAME_oneline(
 				X509_get_subject_name(server_cert),0,0);
 			u_cert_subject = urlencode(cert_subject);
@@ -1908,31 +1888,27 @@ void	register_server (int ssn_index, const char *nickname)
 			u_cert_issuer = urlencode(cert_issuer);
 			say("issuer: %s", u_cert_issuer);
 
-			server_list[ssn_index].ssl_enabled = TRUE;
+			set_server_ssl_enabled(refnum, TRUE);
 			server_pkey = X509_get_pubkey(server_cert);
 			say("public key: %d", EVP_PKEY_bits(server_pkey));
-			if (do_hook(SSL_SERVER_CERT_LIST, "%s %s %s",
-				server_list[ssn_index].name,
-				cert_subject,
-				cert_issuer))
-			{
-			}
+			do_hook(SSL_SERVER_CERT_LIST, "%s %s %s",
+				s->name, cert_subject, cert_issuer);
+
 			new_free(&u_cert_issuer);
 			new_free(&u_cert_subject);
 			free(cert_issuer);
 			free(cert_subject);
 		}
-	}
 #endif
-	if (server_list[ssn_index].password)
-		send_to_aserver(ssn_index, "PASS %s", 
-			server_list[ssn_index].password);
+	}
+	if (s->password)
+		send_to_aserver(refnum, "PASS %s", s->password);
 
-	send_to_aserver(ssn_index, "USER %s %s %s :%s", username, 
+	send_to_aserver(refnum, "USER %s %s %s :%s", username, 
 			(send_umode && *send_umode) ? send_umode : 
 			(LocalHostName ? LocalHostName : hostname), 
 			username, (*realname ? realname : space));
-	change_server_nickname(ssn_index, nickname);
+	change_server_nickname(refnum, nickname);
 }
 
 /*
@@ -1944,35 +1920,43 @@ void 	password_sendline (char *data, char *line)
 {
 	int	new_server;
 
-	if (line && *line)
-	{
-		new_server = atoi(data);
-		set_server_password(new_server, line);
-		change_window_server(new_server, new_server);
-		server_reconnects_to(new_server, new_server);
-		reconnect(new_server, 1);
-	}
+	if (!line || !*line)
+		return;
+
+	new_server = parse_server_index(data, 0);
+	set_server_password(new_server, line);
+	change_window_server(new_server, new_server);
+	server_reconnects_to(new_server, new_server);
+	reconnect(new_server, 1);
 }
 
 char *	get_server_password (int refnum)
 {
-	return server_list[refnum].password;
+	Server *s;
+
+	if (!(s = get_server(refnum)))
+		return NULL;
+
+	return s->password;
 }
 
 /*
  * set_server_password: this sets the password for the server with the given
- * index.  If password is null, the password for the given server is returned 
+ * index. If 'password' is NULL, the password is cleared
  */
-char	*set_server_password (int ssp_index, const char *password)
+char	*set_server_password (int refnum, const char *password)
 {
-	if (server_list)
-	{
-		if (password)
-		   malloc_strcpy(&(server_list[ssp_index].password), password);
-		return (server_list[ssp_index].password);
-	}
+	Server *s;
+
+	if (!(s = get_server(refnum)))
+		return NULL;
+
+	if (password)
+		malloc_strcpy(&s->password, password);
 	else
-		return ((char *) 0);
+		new_free(&s->password);
+
+	return s->password;
 }
 
 
@@ -1980,37 +1964,46 @@ char	*set_server_password (int ssp_index, const char *password)
  * is_server_open: Returns true if the given server index represents a server
  * with a live connection, returns false otherwise 
  */
-int	is_server_open (int iso_index)
+int	is_server_open (int refnum)
 {
-	if (iso_index < 0 || iso_index >= number_of_servers) 
-		return (0);
-	return (server_list[iso_index].des != -1);
+	Server *s;
+
+	if (!(s = get_server(refnum)))
+		return 0;
+
+	return (s->des != -1);
 }
 
 /*
- * is_server_connected: returns true if the given server is connected.  This
- * means that both the tcp connection is open and the user is properly
+ * is_server_registered: returns true if the given server is registered.  
+ * This means that both the tcp connection is open and the user is properly
  * registered 
  */
-int	is_server_connected (int isc_index)
+int	is_server_registered (int refnum)
 {
-	if (isc_index >= 0 && isc_index < number_of_servers)
-		return (server_list[isc_index].connected);
-	return 0;
+	Server *s;
+
+	if (!(s = get_server(refnum)))
+		return 0;
+
+	return s->registered;
 }
 
 /*
  * Informs the client that the user is now officially registered or not
  * registered on the specified server.
  */
-void 	server_is_connected (int sic_index, int value)
+void 	server_is_registered (int refnum, int value)
 {
-	if (sic_index < 0 || sic_index >= number_of_servers)
+	Server *s;
+
+	if (!(s = get_server(refnum)))
 		return;
 
-	server_list[sic_index].connected = value;
-	server_list[sic_index].registration_pending = 0;
-	server_list[sic_index].rejoined_channels = 0;
+	s->registered = value;
+	s->registration_pending = 0;
+	s->rejoined_channels = 0;
+
 	if (value)
 	{
 		/* 
@@ -2019,28 +2012,36 @@ void 	server_is_connected (int sic_index, int value)
 		 * then we must turn it off, rather than the other way
 		 * around.
 		 */
-		save_server_channels(sic_index);
-		server_list[sic_index].reconnect_to = sic_index;
-		server_list[sic_index].eof = 0;
+#if 0
+		set_server_save_channels(refnum, 0);
+#endif
+		s->reconnect_to = refnum;
+		s->eof = 0;
 		clear_reconnect_counts();
-		destroy_005(sic_index);
+		destroy_005(refnum);
 	}
 }
 
-void	server_did_rejoin_channels (int sic_index)
+void	server_did_rejoin_channels (int refnum)
 {
-	if (sic_index < 0 || sic_index >= number_of_servers)
+	Server *s;
+
+	if (!(s = get_server(refnum)))
 		return;
-	server_list[sic_index].rejoined_channels = 1;
+
+	s->rejoined_channels = 1;
 }
 
-int	did_server_rejoin_channels (int sic_index)
+int	did_server_rejoin_channels (int refnum)
 {
-	if (sic_index < 0 || sic_index >= number_of_servers)
+	Server *s;
+
+	if (!(s = get_server(refnum)))
 		return 0;
-	if (server_list[sic_index].connected == 0)
+
+	if (!is_server_registered(refnum))
 		return 0;
-	return server_list[sic_index].rejoined_channels;
+	return s->rejoined_channels;
 }
 
 BUILT_IN_COMMAND(disconnectcmd)
@@ -2053,14 +2054,14 @@ BUILT_IN_COMMAND(disconnectcmd)
 		i = get_window_server(0);
 	else
 	{
-		if ((i = parse_server_index(server)) == -1)
+		if ((i = parse_server_index(server, 0)) == NOSERV)
 		{
 			say("No such server!");
 			return;
 		}
 	}
 
-	if (i >= 0 && i < number_of_servers)
+	if (get_server(i))
 	{
 		if (!args || !*args)
 			message = "Disconnecting";
@@ -2068,8 +2069,8 @@ BUILT_IN_COMMAND(disconnectcmd)
 			message = args;
 
 		say("Disconnecting from server %s", get_server_itsname(i));
-		server_reconnects_to(i, -1);
-		dont_save_server_channels(i);
+		server_reconnects_to(i, NOSERV);
+		set_server_save_channels(i, 0);
 		close_server(i, message);
 		update_all_status();
 	}
@@ -2084,8 +2085,11 @@ int 	auto_reconnect_callback (void *d)
 	char *	stuff = (char *)d;
 	int	servref;
 
-	servref = my_atol(stuff);
+	servref = parse_server_index(stuff, 0);
 	new_free((char **)&d);
+
+	if (servref == NOSERV)
+		return 0;		/* Don't bother */
 
 	server_reconnects_to(servref, servref);
 	reconnect(servref, 1);
@@ -2094,91 +2098,92 @@ int 	auto_reconnect_callback (void *d)
 
 int	server_reconnects_to (int oldref, int newref)
 {
-	if (oldref == -1)
+	Server *old_s;
+	Server *new_s;
+
+	if (oldref == NOSERV)
 	{
 		reconnects_to_hint = newref;
 		return 1;
 	}
-	if (oldref < 0 || oldref >= number_of_servers)
+
+	if (!(old_s = get_server(oldref)))
 		return 0;
-	if (newref >= number_of_servers)
-		newref = 0;
-	if (newref < -1)
+	if (newref != NOSERV && !(new_s = get_server(newref)))
 		return 0;
-	server_list[oldref].reconnect_to = newref;
+
+	old_s->reconnect_to = newref;
 	return 1;
-}
-
-int	set_server_quit_message (int servref, const char *message)
-{
-	if (servref < 0 || servref >= number_of_servers)
-		return -1;
-	malloc_strcpy(&server_list[servref].quit_message, message);
-	return 0;
-}
-
-const char *	get_server_quit_message (int servref)
-{
-	if (servref < 0 || servref >= number_of_servers ||
-			server_list[servref].quit_message == NULL)
-		return "get_server_quit_message";
-
-	return server_list[servref].quit_message;
 }
 
 /* PORTS */
 void    set_server_port (int refnum, int port)
 {
-        server_list[refnum].port = port;
+	Server *s;
+
+	if (!(s = get_server(refnum)))
+		return;
+
+	s->port = port;
 }
 
 /* get_server_port: Returns the connection port for the given server index */
-int	get_server_port (int gsp_index)
+int	get_server_port (int refnum)
 {
+	Server *s;
 	char	p_port[12];
 
-	if (gsp_index == -1)
-		gsp_index = primary_server;
-	else if (gsp_index >= number_of_servers)
+	if (!(s = get_server(refnum)))
 		return 0;
 
-	if (!inet_ntostr((SA *)&server_list[gsp_index].remote_sockname, 
-			NULL, 0, p_port, 12, 0))
+	if (!inet_ntostr((SA *)&s->remote_sockname, NULL, 0, p_port, 12, 0))
 		return atol(p_port);
 
-	return server_list[gsp_index].port;
+	return s->port;
 }
 
-int	get_server_local_port (int gsp_index)
+int	get_server_local_port (int refnum)
 {
+	Server *s;
 	char	p_port[12];
 
-	if (gsp_index == -1)
-		gsp_index = primary_server;
-	else if (gsp_index >= number_of_servers)
+	if (!(s = get_server(refnum)))
 		return 0;
 
-	if (!inet_ntostr((SA *)&server_list[gsp_index].remote_sockname, 
-			NULL, 0, p_port, 12, 0))
+	if (!inet_ntostr((SA *)&s->remote_sockname, NULL, 0, p_port, 12, 0))
 		return atol(p_port);
 
 	return 0;
 }
 
-SS	get_server_local_addr (int servnum)
+SS	get_server_local_addr (int refnum)
 {
-	return server_list[servnum].local_sockname;
+	Server *s;
+
+	if (!(s = get_server(refnum)))
+		panic("Refnum %d isn't valid in get_server_local_addr", refnum);
+
+	return s->local_sockname;
 }
 
-SS	get_server_uh_addr (int servnum)
+SS	get_server_uh_addr (int refnum)
 {
-	return server_list[servnum].uh_addr;
+	Server *s;
+
+	if (!(s = get_server(refnum)))
+		panic("Refnum %d isn't valid in get_server_uh_addr", refnum);
+
+	return s->uh_addr;
 }
 
 /* USERHOST */
 void	set_server_userhost (int refnum, const char *userhost)
 {
+	Server *s;
 	char *host;
+
+	if (!(s = get_server(refnum)))
+		return;
 
 	if (!(host = strchr(userhost, '@')))
 	{
@@ -2187,11 +2192,11 @@ void	set_server_userhost (int refnum, const char *userhost)
 		return;
 	}
 
-	malloc_strcpy(&server_list[from_server].userhost, userhost);
+	malloc_strcpy(&s->userhost, userhost);
 
 	/* Ack!  Oh well, it's for DCC. */
-	FAMILY(server_list[from_server].uh_addr) = AF_INET;
-	if (inet_strton(host + 1, zero, (SA *)&server_list[from_server].uh_addr, 0))
+	FAMILY(s->uh_addr) = AF_INET;
+	if (inet_strton(host + 1, zero, (SA *)&s->uh_addr, 0))
 		yell("Ack.  The server says your userhost is [%s] and "
 		     "I can't figure out the IPv4 address of that host! "
 		     "You won't be able to use /SET DCC_USE_GATEWAY_ADDR ON "
@@ -2201,70 +2206,27 @@ void	set_server_userhost (int refnum, const char *userhost)
 /*
  * get_server_userhost: return the userhost for this connection to server
  */
-const char	*get_server_userhost (int gsu_index)
+const char	*get_server_userhost (int refnum)
 {
-	if (gsu_index >= number_of_servers)
-		return empty_string;
-	else if (gsu_index != -1 && server_list[gsu_index].userhost)
-		return (server_list[gsu_index].userhost);
-	else
+	Server *s;
+
+	if (!(s = get_server(refnum)) || !s->userhost)
 		return get_userhost();
+
+	return s->userhost;
 }
-
-/*
- * got_my_userhost -- callback function, XXXX doesnt belong here
- */
-void 	got_my_userhost (UserhostItem *item, char *nick, char *stuff)
-{
-	char *freeme;
-
-	freeme = m_3dup(item->user, "@", item->host);
-	set_server_userhost(from_server, freeme);
-	new_free(&freeme);
-}
-
-
-
-/* SERVER OPERATOR */
-/*
- * get_server_operator: returns true if the user has op privs on the server,
- * false otherwise 
- */
-int	get_server_operator (int gso_index)
-{
-	if ((gso_index < 0) || (gso_index >= number_of_servers))
-		return 0;
-	return (server_list[gso_index].oper);
-}
-
-/*
- * set_server_operator: If flag is non-zero, marks the user as having op
- * privs on the given server.
- */
-void	set_server_operator (int sso_index, int flag)
-{
-	if (sso_index < 0 || sso_index >= number_of_servers)
-		return;
-
-	server_list[sso_index].oper = flag;
-	oper_command = 0;		/* No longer doing oper */
-	do_umode(sso_index);
-}
-
 
 
 /* COOKIES */
-void	set_server_cookie (int ssc_index, const char *cookie)
+void	use_server_cookie (int refnum)
 {
-	if (server_list[ssc_index].cookie)
-		send_to_aserver(ssc_index, "COOKIE %s", 
-				server_list[ssc_index].cookie);
-	malloc_strcpy(&server_list[ssc_index].cookie, cookie);
-}
+	Server *s;
 
-char *  get_server_cookie (int ssc_index)
-{
-        return server_list[ssc_index].cookie;
+	if (!(s = get_server(refnum)))
+		return;
+
+	if (s->cookie)
+		send_to_aserver(refnum, "COOKIE %s", s->cookie);
 }
 
 
@@ -2273,26 +2235,28 @@ char *  get_server_cookie (int ssc_index)
  * get_server_nickname: returns the current nickname for the given server
  * index 
  */
-const char	*get_server_nickname (int gsn_index)
+const char	*get_server_nickname (int refnum)
 {
-	if (gsn_index >= number_of_servers)
-		return empty_string;
-	else if (gsn_index != -1 && server_list[gsn_index].nickname)
-		return (server_list[gsn_index].nickname);
-	else
-		return "<not registered yet>";
+	Server *s;
+
+	if (!(s = get_server(refnum)))
+		return "<invalid server>";
+
+	if (s->nickname)
+		return s->nickname;
+
+	return "<not registered yet>";
 }
 
 int	is_me (int refnum, const char *nick)
 {
-	if (refnum == -1 && from_server != -1)
-		refnum = from_server;
+	Server *s;
 
-	if (refnum >= number_of_servers || refnum < 0)
+	if (!(s = get_server(refnum)))
 		return 0;
 
-	if (server_list[refnum].nickname && nick)
-		return !my_stricmp(nick, server_list[refnum].nickname);
+	if (s->nickname && nick)
+		return !my_stricmp(nick, s->nickname);
 
 	return 0;
 }
@@ -2309,10 +2273,13 @@ int	is_me (int refnum, const char *nick)
  * we're trying to change our nickname to.  If we're not trying to change
  * our nickname, then this function does nothing.
  */
-void	change_server_nickname (int ssn_index, const char *nick)
+void	change_server_nickname (int refnum, const char *nick)
 {
-	Server *s = &server_list[ssn_index];
-	char	*n;
+	Server *s;
+	char *	n;
+
+	if (!(s = get_server(refnum)))
+		return;			/* Uh, no. */
 
 	s->resetting_nickname = 0;
 	if (nick)
@@ -2324,42 +2291,40 @@ void	change_server_nickname (int ssn_index, const char *nick)
 		    malloc_strcpy(&s->s_nickname, n);
 		}
 		else
-			reset_nickname(ssn_index);
+			reset_nickname(refnum);
 	}
 
 	if (s->s_nickname)
-		send_to_aserver(ssn_index, "NICK %s", s->s_nickname);
+		send_to_aserver(refnum, "NICK %s", s->s_nickname);
 }
 
-const char *	get_pending_nickname (int servnum)
+const char *	get_pending_nickname (int refnum)
 {
-	return server_list[servnum].s_nickname;
+	Server *s;
+
+	if (!(s = get_server(refnum)))
+		return NULL;
+
+	return s->s_nickname;
 }
 
-
-void	accept_server_nickname (int ssn_index, const char *nick)
+void	accept_server_nickname (int refnum, const char *nick)
 {
-	malloc_strcpy(&server_list[ssn_index].nickname, nick);
-	malloc_strcpy(&server_list[ssn_index].d_nickname, nick);
-	new_free(&server_list[ssn_index].s_nickname);
-	server_list[ssn_index].fudge_factor = 0;
+	Server *s;
 
-	if (ssn_index == primary_server)
+	if (!(s = get_server(refnum)))
+		return;
+
+	malloc_strcpy(&s->nickname, nick);
+	malloc_strcpy(&s->d_nickname, nick);
+	new_free(&s->s_nickname);
+	s->fudge_factor = 0;
+
+	if (refnum == primary_server)
 		strmcpy(nickname, nick, NICKNAME_LEN);
 
 	update_all_status();
 }
-
-void	nick_command_is_pending (int servnum, int value)
-{
-	server_list[servnum].nickname_pending = value;
-}
-
-int	is_nick_command_pending (int servnum)
-{
-	return server_list[servnum].nickname_pending;
-}
-
 
 /* 
  * This will generate up to 18 nicknames plus the 9-length(nickname)
@@ -2372,10 +2337,15 @@ int	is_nick_command_pending (int servnum)
  * out of guesses, and if it ever gets to that point, it will do the
  * manually-ask-you-for-a-new-nickname thing.
  */
-void 	fudge_nickname (int servnum)
+void 	fudge_nickname (int refnum)
 {
+	Server *s;
+const	char	*nicklen_005;
+	int	nicklen;
 	char 	l_nickname[NICKNAME_LEN + 1];
-	Server *s = &server_list[servnum];
+
+	if (!(s = get_server(refnum)))
+		return;			/* Uh, no. */
 
 	/*
 	 * If we got here because the user did a /NICK command, and
@@ -2384,7 +2354,7 @@ void 	fudge_nickname (int servnum)
 	 */
 	if (s->nickname_pending)
 	{
-		nick_command_is_pending(servnum, 0);
+		set_server_nickname_pending(refnum, 0);
 		new_free(&s->s_nickname);
 		return;
 	}
@@ -2408,7 +2378,7 @@ void 	fudge_nickname (int servnum)
 		if (++s->fudge_factor == 17)
 		{
 			/* give up... */
-			reset_nickname(servnum);
+			reset_nickname(refnum);
 			s->fudge_factor = 0;
 			return;
 		}
@@ -2418,7 +2388,11 @@ void 	fudge_nickname (int servnum)
 	 * Process of fudging a nickname:
 	 * If the nickname length is less then 9, add an underscore.
 	 */
-	if (strlen(l_nickname) < 9)
+	nicklen_005 = get_server_005(refnum, "NICKLEN");
+	nicklen = nicklen_005 ? atol(nicklen_005) : 9;
+	nicklen = nicklen > 0 ? nicklen : 9;
+
+	if (strlen(l_nickname) < nicklen)
 		strcat(l_nickname, "_");
 
 	/* 
@@ -2426,24 +2400,23 @@ void 	fudge_nickname (int servnum)
 	 */
 	else
 	{
-		char tmp = l_nickname[8];
-		l_nickname[8] = l_nickname[7]; l_nickname[7] = l_nickname[6];
-		l_nickname[6] = l_nickname[5]; l_nickname[5] = l_nickname[4];
-		l_nickname[4] = l_nickname[3]; l_nickname[3] = l_nickname[2];
-		l_nickname[2] = l_nickname[1]; l_nickname[1] = l_nickname[0];
+		char tmp = l_nickname[nicklen-1];
+		int foo;
+		for (foo = nicklen-1; foo>0; foo--)
+			l_nickname[foo] = l_nickname[foo-1];
 		l_nickname[0] = tmp;
 	}
 
 	/*
 	 * This is the degenerate case
 	 */
-	if (!strcmp(l_nickname, "_________"))
+	if (strspn(l_nickname, "_") >= nicklen)
 	{
-		reset_nickname(servnum);
+		reset_nickname(refnum);
 		return;
 	}
 
-	change_server_nickname(servnum, l_nickname);
+	change_server_nickname(refnum, l_nickname);
 }
 
 
@@ -2454,7 +2427,7 @@ void 	nickname_sendline (char *data, char *nick)
 {
 	int	new_server;
 
-	new_server = atoi(data);
+	new_server = parse_server_index(data, 0);
 	change_server_nickname(new_server, nick);
 }
 
@@ -2463,19 +2436,20 @@ void 	nickname_sendline (char *data, char *nick)
  * a good one, it gets reset here. 
  * -- Called by more than one place
  */
-void 	reset_nickname (int servnum)
+void 	reset_nickname (int refnum)
 {
+	Server *s;
 	char	server_num[10];
 
-	if (server_list[servnum].resetting_nickname == 1)
-		return;		/* Don't repeat the reset */
+	if (!(s = get_server(refnum)) || s->resetting_nickname == 1)
+		return; 		/* Don't repeat the reset */
 
-	server_list[servnum].resetting_nickname = 1;
+	s->resetting_nickname = 1;
 	say("You have specified an invalid nickname");
 	if (!dumb_mode)
 	{
 		say("Please enter your nickname");
-		strcpy(server_num, ltoa(servnum));
+		strcpy(server_num, ltoa(refnum));
 		add_wait_prompt("Nickname: ", nickname_sendline, server_num,
 			WAIT_PROMPT_LINE, 1);
 	}
@@ -2484,25 +2458,16 @@ void 	reset_nickname (int servnum)
 
 
 /* REDIRECT STUFF */
-void 	set_server_redirect (int s, const char *who)
+int	check_server_redirect (int refnum, const char *who)
 {
-	malloc_strcpy(&server_list[s].redirect, who);
-}
+	Server *s;
 
-const char *get_server_redirect (int s)
-{
-	return server_list[s].redirect;
-}
-
-int	check_server_redirect (const char *who)
-{
-	if (!who || !server_list[from_server].redirect)
+	if (!who || !(s = get_server(refnum)) || !s->redirect)
 		return 0;
 
-	if (!strncmp(who, "***", 3) && 
-	    !strcmp(who + 3, server_list[from_server].redirect))
+	if (!strncmp(who, "***", 3) && !strcmp(who + 3, s->redirect))
 	{
-		set_server_redirect(from_server, NULL);
+		set_server_redirect(refnum, NULL);
 		if (!strcmp(who + 3, "0"))
 			say("Server flush done.");
 		return 1;
@@ -2517,203 +2482,220 @@ int	check_server_redirect (const char *who)
  */
 void 	save_servers (FILE *fp)
 {
+	Server *s;
 	int	i;
-
-	if (!server_list)
-		return;		/* no servers */
 
 	for (i = 0; i < number_of_servers; i++)
 	{
+		if (!(s = get_server(i)))
+			continue;
+
 		/* SERVER -ADD server:port:password:nick */
 		fprintf(fp, "SERVER -ADD %s:%d:%s:%s:%s:%s\n",
-			server_list[i].name,
-			server_list[i].port,
-			server_list[i].password ? 
-				server_list[i].password : empty_string,
-			server_list[i].nickname ?
-				server_list[i].nickname : empty_string,
-			server_list[i].group ?
-				server_list[i].group : empty_string,
+			s->name, s->port,
+			s->password ?  s->password : empty_string,
+			s->nickname ?  s->nickname : empty_string,
+			s->group ?  s->group : empty_string,
 			get_server_type(i));
 	}
 }
 
 void	clear_reconnect_counts (void)
 {
+	Server *s;
 	int	i;
 
 	for (i = 0; i < number_of_servers; i++)
-		server_list[i].reconnects = 0;
-}
-
-/* This didn't belong in the middle of the redirect stuff. */
-void    set_server_group (int refnum, const char *group)
-{
-        malloc_strcpy(&server_list[refnum].group, group);
-}
-
-const char *get_server_group (int refnum)
-{
-	if (refnum == -1 && from_server != -1)
-		refnum = from_server;
-
-	if (refnum >= number_of_servers || refnum < 0)
-		return 0;
-
-	if (server_list[refnum].group == NULL)
-		return "<default>";
-
-	return server_list[refnum].group;
+	{
+		if (!(s = get_server(i)))
+			continue;
+		s->reconnects = 0;
+	}
 }
 
 const char *get_server_type (int refnum)
 {
-	if (refnum == -1 && from_server != -1)
-		refnum = from_server;
+	Server *s;
 
-	if (refnum >= number_of_servers || refnum < 0)
-		return 0;
-#ifdef HAVE_SSL
-	if (server_list[refnum].enable_ssl)
+	if (!(s = get_server(refnum)))
+		return NULL;
+
+	if (get_server_try_ssl(refnum) == TRUE)
 		return "IRC-SSL";
 	else
-#endif
 		return "IRC";
 }
 
 /*****************************************************************************/
-static __inline__ Server *      get_server (int server)
+#define SET_IATTRIBUTE(param, member) \
+void	set_server_ ## member (int servref, int param )	\
+{							\
+	Server *s;					\
+							\
+	if (!(s = get_server(servref)))			\
+		return;					\
+							\
+	s-> member = param;				\
+}
+
+#define GET_IATTRIBUTE(member) \
+int	get_server_ ## member (int servref)		\
+{							\
+	Server *s;					\
+							\
+	if (!(s = get_server(servref)))			\
+		return -1;				\
+							\
+	return s-> member ;				\
+}
+
+#define SET_SATTRIBUTE(param, member) \
+void	set_server_ ## member (int servref, const char * param )	\
+{							\
+	Server *s;					\
+							\
+	if (!(s = get_server(servref)))			\
+		return;					\
+							\
+	malloc_strcpy(&s-> member , param);		\
+}
+
+#define GET_SATTRIBUTE(member, default)			\
+const char *	get_server_ ## member (int servref ) \
+{							\
+	Server *s;					\
+							\
+	if (!(s = get_server(servref)))			\
+		return default ;			\
+							\
+	if (s-> member )				\
+		return s-> member ;			\
+	else						\
+		return default ;			\
+}
+
+#define IACCESSOR(param, member)		\
+SET_IATTRIBUTE(param, member)			\
+GET_IATTRIBUTE(member)
+
+#define SACCESSOR(param, member, default)	\
+SET_SATTRIBUTE(param, member)			\
+GET_SATTRIBUTE(member, default)
+
+IACCESSOR(v, doing_privmsg)
+IACCESSOR(v, doing_notice)
+IACCESSOR(v, doing_ctcp)
+IACCESSOR(v, nickname_pending)
+IACCESSOR(v, sent)
+IACCESSOR(v, version)
+IACCESSOR(v, save_channels)
+SACCESSOR(chan, invite_channel, NULL)
+SACCESSOR(nick, last_notify_nick, NULL)
+SACCESSOR(nick, joined_nick, NULL)
+SACCESSOR(nick, public_nick, NULL)
+SACCESSOR(nick, recv_nick, NULL)
+SACCESSOR(nick, sent_nick, NULL)
+SACCESSOR(text, sent_body, NULL)
+SACCESSOR(nick, redirect, NULL)
+SACCESSOR(group, group, "<default>")
+SACCESSOR(message, quit_message, "get_server_quit_message")
+SACCESSOR(cookie, cookie, NULL);
+SACCESSOR(ver, version_string, NULL);
+
+GET_IATTRIBUTE(operator)
+void	set_server_operator (int refnum, int flag)
 {
-        if (server == -1)
-                server = primary_server;
-        if (server < 0 || server >= number_of_servers)
-                return NULL;
-        return &server_list[server];
-}
-/* 
- * These two macros do bounds checking on server refnums that are
- * passed into various server functions
- */
-#define CHECK_SERVER(x)                         \
-{                                               \
-        if (x < 0 || x >= number_of_servers)    \
-                return;                         \
-        if (!get_server(x))                     \
-                return;                         \
+	Server *s;
+
+	if (!(s = get_server(refnum)))
+		return;
+
+	s->operator = flag;
+	oper_command = 0;		/* No longer doing oper */
+	do_umode(refnum);
 }
 
-#define CHECK_SERVER_RET(x, y)                  \
-{                                               \
-        if (x < 0 || x >= number_of_servers)    \
-                return (y);                     \
-        if (!get_server(x))                     \
-                return (y);                     \
-}
-
-#define FROMSERV        get_server(from_server)
-#define SERVER(x)       get_server(x)
-
-int	doing_privmsg (void)
+SACCESSOR(name, name, "<none>");
+SET_SATTRIBUTE(name, itsname)
+const char	*get_server_itsname (int refnum)
 {
-	return FROMSERV->doing_privmsg;
+	Server *s;
+
+	if (!(s = get_server(refnum)))
+		return "<none>";
+
+	if (s->itsname)
+		return s->itsname;
+	else
+		return s->name;
 }
 
-int	doing_notice (void)
+int	get_server_protocol_state (int refnum)
 {
-	return FROMSERV->doing_notice;
+	int	retval;
+
+	retval = get_server_doing_ctcp(refnum);
+	retval = retval << 8;
+
+	retval += get_server_doing_notice(refnum);
+	retval = retval << 8;
+
+	retval += get_server_doing_privmsg(refnum);
+
+	return retval;
 }
 
-int	doing_ctcp (void)
+void	set_server_protocol_state (int refnum, int state)
 {
-	return FROMSERV->in_ctcp_flag;
+	int	val;
+
+	val = state & 0xFF;
+	set_server_doing_privmsg(refnum, val);
+	state = state >> 8;
+
+	val = state & 0xFF;
+	set_server_doing_notice(refnum, val);
+	state = state >> 8;
+
+	val = state & 0xFF;
+	set_server_doing_ctcp(refnum, val);
+	state = state >> 8;
 }
 
-void	set_doing_privmsg (int v)
+void	set_server_try_ssl (int refnum, int flag)
 {
-	FROMSERV->doing_privmsg = v;
-}
+	Server *s;
 
-void	set_doing_notice (int v)
-{
-	FROMSERV->doing_notice = v;
-}
+	if (!(s = get_server(refnum)))
+		return;
 
-void	set_doing_ctcp (int v)
-{
-	FROMSERV->in_ctcp_flag = v;
+#ifndef HAVE_SSL
+	if (flag == TRUE)
+		say("This server does not have SSL support.");
+	flag = FALSE;
+#endif
+	s->try_ssl = flag;
 }
+GET_IATTRIBUTE(try_ssl)
+
+void	set_server_ssl_enabled (int refnum, int flag)
+{
+	Server *s;
+
+	if (!(s = get_server(refnum)))
+		return;
+
+#ifndef HAVE_SSL
+	if (flag == TRUE)
+		say("This server does not have SSL support.");
+	flag = FALSE;
+	s->try_ssl = flag;
+#endif
+	s->ssl_enabled = flag;
+}
+GET_IATTRIBUTE(ssl_enabled)
 
 /*****/
-void	set_server_invite_channel (const char *chan)
-{
-	malloc_strcpy(&FROMSERV->invite_channel, chan);
-}
-
-const char *	get_server_invite_channel (void)
-{
-	return FROMSERV->invite_channel;
-}
-
-void	set_server_last_notify (const char *nick)
-{
-	malloc_strcpy(&FROMSERV->last_notify_nick, nick);
-}
-
-const char *	get_server_last_notify (void)
-{
-	return FROMSERV->last_notify_nick;
-}
-
-void	set_server_joined_nick (const char *nick)
-{
-	malloc_strcpy(&FROMSERV->joined_nick, nick);
-}
-
-const char *	get_server_joined_nick (void)
-{
-	return FROMSERV->joined_nick;
-}
-
-void	set_server_public_nick (const char *nick)
-{
-	malloc_strcpy(&FROMSERV->public_nick, nick);
-}
-
-const char *	get_server_public_nick (void)
-{
-	return FROMSERV->public_nick;
-}
-
-void	set_server_recv_nick (const char *nick)
-{
-	malloc_strcpy(&FROMSERV->recv_nick, nick);
-}
-
-const char *	get_server_recv_nick (void)
-{
-	return FROMSERV->recv_nick;
-}
-
-void	set_server_sent_nick (const char *nick)
-{
-	malloc_strcpy(&FROMSERV->sent_nick, nick);
-}
-
-const char *	get_server_sent_nick (void)
-{
-	return FROMSERV->sent_nick;
-}
-
-void	set_server_sent_body (const char *text)
-{
-	malloc_strcpy(&FROMSERV->sent_body, text);
-}
-
-const char *	get_server_sent_body (void)
-{
-	return FROMSERV->sent_body;
-}
-
 /* WAIT STUFF */
 /*
  * This isnt a command, its used by the wait command.  Since its extern,
@@ -2722,31 +2704,45 @@ const char *	get_server_sent_body (void)
  */
 void 	server_hard_wait (int i)
 {
-	CHECK_SERVER(i)
+	Server *s;
+	int	proto, old_from_server;
 
-	if (!is_server_connected(i))
+	if (!(s = get_server(i)))
 		return;
 
-	SERVER(i)->waiting_out++;
+	if (!is_server_registered(i))
+		return;
+
+	proto = get_server_protocol_state(i);
+	old_from_server = from_server;
+
+	s->waiting_out++;
 	lock_stack_frame();
 	send_to_aserver(i, "%s", lame_wait_nick);
-	while (SERVER(i) && (SERVER(i)->waiting_in < SERVER(i)->waiting_out))
+	while ((s = get_server(i)) && (s->waiting_in < s->waiting_out))
 		io("oh_my_wait");
+
+	set_server_protocol_state(i, proto);
+	from_server = old_from_server;
 }
 
 void	server_passive_wait (int i, const char *stuff)
 {
+	Server *s;
 	WaitCmd	*new_wait;
+
+	if (!(s = get_server(i)))
+		return;
 
 	new_wait = (WaitCmd *)new_malloc(sizeof(WaitCmd));
 	new_wait->stuff = m_strdup(stuff);
 	new_wait->next = NULL;
 
-	if (SERVER(i)->end_wait_list)
-		SERVER(i)->end_wait_list->next = new_wait;
-	SERVER(i)->end_wait_list = new_wait;
-	if (!SERVER(i)->start_wait_list)
-		SERVER(i)->start_wait_list = new_wait;
+	if (s->end_wait_list)
+		s->end_wait_list->next = new_wait;
+	s->end_wait_list = new_wait;
+	if (!s->start_wait_list)
+		s->start_wait_list = new_wait;
 
 	send_to_aserver(i, "%s", wait_nick);
 }
@@ -2759,9 +2755,12 @@ void	server_passive_wait (int i, const char *stuff)
  * number of outbound tokens, then we are free to clear this stack frame
  * which will cause all of the pending waits to just fall out.
  */
-int	check_server_wait (const char *nick)
+int	check_server_wait (int refnum, const char *nick)
 {
-	Server	*s = FROMSERV;
+	Server	*s;
+
+	if (!(s = get_server(refnum)))
+		return 0;
 
 	if ((s->waiting_out > s->waiting_in) && !strcmp(nick, lame_wait_nick))
 	{
@@ -2788,6 +2787,19 @@ int	check_server_wait (const char *nick)
 	return 0;
 }
 
+/****** FUNNY STUFF ******/
+IACCESSOR(v, funny_min)
+IACCESSOR(v, funny_max)
+IACCESSOR(v, funny_flags)
+SACCESSOR(match, funny_match, NULL);
+
+void	set_server_funny_stuff (int refnum, int min, int max, int flags, const char *stuff)
+{
+	set_server_funny_min(refnum, min);
+	set_server_funny_max(refnum, max);
+	set_server_funny_flags(refnum, flags);
+	set_server_funny_match(refnum, stuff);
+}
 
 /*****************************************************************************/
 
@@ -2795,11 +2807,16 @@ int	check_server_wait (const char *nick)
 
 void make_005 (int refnum)
 {
-	server_list[refnum].a005.list = NULL;
-	server_list[refnum].a005.max = 0;
-	server_list[refnum].a005.total_max = 0;
-	server_list[refnum].a005.func = (alist_func)strncmp;
-	server_list[refnum].a005.hash = HASH_SENSITIVE; /* One way to deal with rfc2812 */
+	Server *s;
+
+	if (!(s = get_server(refnum)))
+		return;
+
+	s->a005.list = NULL;
+	s->a005.max = 0;
+	s->a005.total_max = 0;
+	s->a005.func = (alist_func)strncmp;
+	s->a005.hash = HASH_SENSITIVE; /* One way to deal with rfc2812 */
 }
 
 void destroy_a_005 (A005_item *item)
@@ -2813,22 +2830,30 @@ void destroy_a_005 (A005_item *item)
 
 void destroy_005 (int refnum)
 {
+	Server *s;
 	A005_item *new_i;
 
-	while ((new_i = (A005_item*)array_pop((array*)(&server_list[refnum].a005), 0)))
+	if (!(s = get_server(refnum)))
+		return;
+
+	while ((new_i = (A005_item*)array_pop((array*)(&s->a005), 0)))
 		destroy_a_005(new_i);
+	s->a005.max = 0;
+	s->a005.total_max = 0;
+	new_free(&s->a005.list);
 }
 
-GET_ARRAY_NAMES_FUNCTION(get_server_005s, (server_list[from_server].a005))
+GET_ARRAY_NAMES_FUNCTION(get_server_005s, (__FROMSERV->a005))
 
 const char* get_server_005 (int refnum, char *setting)
 {
+	Server *s;
 	A005_item *item;
 	int cnt, loc;
 
-	if (0 > refnum || refnum >= number_of_servers)
-		return empty_string;
-	item = (A005_item*)find_array_item((array*)(&server_list[refnum].a005), setting, &cnt, &loc);
+	if (!(s = get_server(refnum)))
+		return NULL;
+	item = (A005_item*)find_array_item((array*)(&s->a005), setting, &cnt, &loc);
 	if (0 > cnt)
 		return ((*item).value);
 	else
@@ -2838,13 +2863,14 @@ const char* get_server_005 (int refnum, char *setting)
 /* value should be null pointer or empty to clear. */
 void set_server_005 (int refnum, char *setting, char *value)
 {
+	Server *s;
 	A005_item *new_005;
 	int	destroy = (!value || !*value);
 
-	if (0 > refnum || refnum >= number_of_servers)
+	if (!(s = get_server(refnum)))
 		return;
 
-	new_005 = (A005_item*)array_lookup((array*)(&server_list[refnum].a005), setting, 0, destroy);
+	new_005 = (A005_item*)array_lookup((array*)(&s->a005), setting, 0, destroy);
 
 	if (destroy) {
 		if (new_005 && !strcmp(setting, (*new_005).name))
@@ -2855,25 +2881,15 @@ void set_server_005 (int refnum, char *setting, char *value)
 		new_005 = (A005_item *)new_malloc(sizeof(A005_item));
 		(*new_005).name = m_strdup(setting);
 		(*new_005).value = m_strdup(value);
-		add_to_array((array*)(&server_list[refnum].a005), (array_item*)new_005);
+		add_to_array((array*)(&s->a005), (array_item*)new_005);
 	}
 }
 
 
-#define EMPTY empty_string
-#define EMPTY_STRING m_strdup(EMPTY)
-#define RETURN_EMPTY return m_strdup(EMPTY)
-#define RETURN_IF_EMPTY(x) if (empty( x )) RETURN_EMPTY
-#define GET_INT_ARG(x, y) {RETURN_IF_EMPTY(y); x = my_atol(safe_new_next_arg(y, &y));}
-#define GET_FLOAT_ARG(x, y) {RETURN_IF_EMPTY(y); x = atof(safe_new_next_arg(y, &y));}
-#define GET_STR_ARG(x, y) {RETURN_IF_EMPTY(y); x = new_next_arg(y, &y);RETURN_IF_EMPTY(x);}
-#define RETURN_MSTR(x) return ((x) ? (x) : EMPTY_STRING);
-#define RETURN_STR(x) return m_strdup((x) ? (x) : EMPTY)
-#define RETURN_INT(x) return m_strdup(ltoa((x)))
-
 /* Used by function_serverctl */
 /*
  * $serverctl(REFNUM server-desc)
+ * $serverctl(MAX)
  * $serverctl(GET 0 [LIST])
  * $serverctl(SET 0 [ITEM] [VALUE])
  * $serverctl(MATCH [pattern])
@@ -2900,148 +2916,195 @@ void set_server_005 (int refnum, char *setting, char *value)
  */
 char 	*serverctl 	(char *input)
 {
-	int	refnum;
+	int	refnum, num, len;
 	char	*listc, *listc1;
+	const char *ret;
 
 	GET_STR_ARG(listc, input);
-	if (!my_strnicmp(listc, "REFNUM", 1)) {
+	len = strlen(listc);
+	if (!my_strnicmp(listc, "REFNUM", len)) {
 		char *server;
 
 		GET_STR_ARG(server, input);
 		if (is_number(server)) {
 			int refnum;
-			refnum = atol(server);
-			if (refnum >= 0 && refnum < number_of_servers)
+			refnum = parse_server_index(server, 1);
+			if (refnum != NOSERV)
 				RETURN_STR(server);
 			RETURN_EMPTY;
 		}
 		RETURN_INT(find_server_refnum(server, &input));
-	} else if (!my_strnicmp(listc, "GET", 2)) {
+	} else if (!my_strnicmp(listc, "GET", len)) {
 		GET_INT_ARG(refnum, input);
-		if (refnum < 0 || refnum >= number_of_servers)
+		if (!get_server(refnum))
 			RETURN_EMPTY;
 
 		GET_STR_ARG(listc, input);
-		if (!my_strnicmp(listc, "AWAY", 1)) {
-			RETURN_STR(get_server_away(refnum));
-		} else if (!my_strnicmp(listc, "CONNECTED", 3)) {
-			RETURN_INT(is_server_connected(refnum));
-		} else if (!my_strnicmp(listc, "COOKIE", 3)) {
-			RETURN_STR(get_server_cookie(refnum));
-		} else if (!my_strnicmp(listc, "GROUP", 1)) {
-			RETURN_STR(get_server_group(refnum));
-		} else if (!my_strnicmp(listc, "ITSNAME", 1)) {
-			RETURN_STR(get_server_itsname(refnum));
-		} else if (!my_strnicmp(listc, "NAME", 2)) {
-			RETURN_STR(get_server_name(refnum));
-		} else if (!my_strnicmp(listc, "NICKNAME", 2)) {
-			RETURN_STR(get_server_nickname(refnum));
-		} else if (!my_strnicmp(listc, "PASSWORD", 2)) {
-			RETURN_STR(get_server_password(refnum));
-		} else if (!my_strnicmp(listc, "PORT", 2)) {
-			RETURN_INT(get_server_port(refnum));
-		} else if (!my_strnicmp(listc, "QUIT_MESSAGE", 1)) {
-			RETURN_STR(get_server_quit_message(refnum));
-#ifdef HAVE_SSL
-		} else if (!my_strnicmp(listc, "SSL", 1)) {
-			RETURN_INT(get_server_enable_ssl(refnum));
-#endif
-		} else if (!my_strnicmp(listc, "UMODES", 6)) {
-			RETURN_STR(get_possible_umodes(refnum));
-		} else if (!my_strnicmp(listc, "UMODE", 2)) {
-			RETURN_STR(get_umode(refnum));
-		} else if (!my_strnicmp(listc, "USERHOST", 2)) {
-			RETURN_STR(get_server_userhost(refnum));
-		} else if (!my_strnicmp(listc, "VERSION", 1)) {
-			RETURN_STR(get_server_version_string(refnum));
-		} else if (!my_strnicmp(listc, "005s", 4)) {
+		len = strlen(listc);
+		if (!my_strnicmp(listc, "AWAY", len)) {
+			ret = get_server_away(refnum);
+			RETURN_STR(ret);
+		} else if (!my_strnicmp(listc, "CONNECTED", len)) {
+			num = is_server_registered(refnum);
+			RETURN_INT(num);
+		} else if (!my_strnicmp(listc, "COOKIE", len)) {
+			ret = get_server_cookie(refnum);
+			RETURN_STR(ret);
+		} else if (!my_strnicmp(listc, "GROUP", len)) {
+			ret = get_server_group(refnum);
+			RETURN_STR(ret);
+		} else if (!my_strnicmp(listc, "ITSNAME", len)) {
+			ret = get_server_itsname(refnum);
+			RETURN_STR(ret);
+		} else if (!my_strnicmp(listc, "NAME", len)) {
+			ret = get_server_name(refnum);
+			RETURN_STR(ret);
+		} else if (!my_strnicmp(listc, "NICKNAME", len)) {
+			ret = get_server_nickname(refnum);
+			RETURN_STR(ret);
+		} else if (!my_strnicmp(listc, "PASSWORD", len)) {
+			ret = get_server_password(refnum);
+			RETURN_STR(ret);
+		} else if (!my_strnicmp(listc, "PORT", len)) {
+			num = get_server_port(refnum);
+			RETURN_INT(num);
+		} else if (!my_strnicmp(listc, "QUIT_MESSAGE", len)) {
+			ret = get_server_quit_message(refnum);
+			RETURN_STR(ret);
+		} else if (!my_strnicmp(listc, "SSL", len)) {
+			num = get_server_try_ssl(refnum);
+			RETURN_INT(num);
+		} else if (!my_strnicmp(listc, "UMODE", len)) {
+			ret = get_umode(refnum);
+			RETURN_STR(ret);
+		} else if (!my_strnicmp(listc, "UMODES", len)) {
+			ret = get_possible_umodes(refnum);
+			RETURN_STR(ret);
+		} else if (!my_strnicmp(listc, "USERHOST", len)) {
+			ret = get_server_userhost(refnum);
+			RETURN_STR(ret);
+		} else if (!my_strnicmp(listc, "VERSION", len)) {
+			ret = get_server_version_string(refnum);
+			RETURN_STR(ret);
+		} else if (!my_strnicmp(listc, "005", len)) {
+			GET_STR_ARG(listc1, input);
+			ret = get_server_005(refnum, listc1);
+			RETURN_STR(ret);
+		} else if (!my_strnicmp(listc, "005s", len)) {
 			int ofs = from_server;
 			char *ret;
 			from_server = refnum;
 			ret = get_server_005s(input);
 			from_server = ofs;
 			RETURN_MSTR(ret);
-		} else if (!my_strnicmp(listc, "005", 3)) {
-			GET_STR_ARG(listc1, input);
-			RETURN_STR(get_server_005(refnum, listc1));
 		}
-	} else if (!my_strnicmp(listc, "SET", 1)) {
+	} else if (!my_strnicmp(listc, "SET", len)) {
 		GET_INT_ARG(refnum, input);
-		if (refnum < 0 || refnum >= number_of_servers)
+		if (!get_server(refnum))
 			RETURN_EMPTY;
 
 		GET_STR_ARG(listc, input);
-		if (!my_strnicmp(listc, "AWAY", 1)) {
+		len = strlen(listc);
+		if (!my_strnicmp(listc, "AWAY", len)) {
 			set_server_away(refnum, input);
 			RETURN_INT(1);
-		} else if (!my_strnicmp(listc, "CONNECTED", 3)) {
+		} else if (!my_strnicmp(listc, "CONNECTED", len)) {
 			RETURN_EMPTY;		/* Read only. */
-		} else if (!my_strnicmp(listc, "COOKIE", 3)) {
+		} else if (!my_strnicmp(listc, "COOKIE", len)) {
 			set_server_cookie(refnum, input);
 			RETURN_INT(1);
-		} else if (!my_strnicmp(listc, "GROUP", 1)) {
+		} else if (!my_strnicmp(listc, "GROUP", len)) {
 			set_server_group(refnum, input);
 			RETURN_INT(1);
-		} else if (!my_strnicmp(listc, "ITSNAME", 1)) {
+		} else if (!my_strnicmp(listc, "ITSNAME", len)) {
 			set_server_itsname(refnum, input);
 			RETURN_INT(1);
-		} else if (!my_strnicmp(listc, "NAME", 2)) {
+		} else if (!my_strnicmp(listc, "NAME", len)) {
 			set_server_name(refnum, input);
 			RETURN_INT(1);
-		} else if (!my_strnicmp(listc, "NICKNAME", 2)) {
+		} else if (!my_strnicmp(listc, "NICKNAME", len)) {
 			change_server_nickname(refnum, input);
 			RETURN_INT(1);
-		} else if (!my_strnicmp(listc, "PASSWORD", 2)) {
+		} else if (!my_strnicmp(listc, "PASSWORD", len)) {
 			set_server_password(refnum, input);
 			RETURN_INT(1);
-		} else if (!my_strnicmp(listc, "PORT", 2)) {
+		} else if (!my_strnicmp(listc, "PORT", len)) {
 			int port;
 
 			GET_INT_ARG(port, input);
 			set_server_port(refnum, port);
 			RETURN_INT(1);
-		} else if (!my_strnicmp(listc, "PRIMARY", 2)) {
+		} else if (!my_strnicmp(listc, "PRIMARY", len)) {
 			primary_server = refnum;
 			RETURN_INT(1);
-		} else if (!my_strnicmp(listc, "QUIT_MESSAGE", 1)) {
+		} else if (!my_strnicmp(listc, "QUIT_MESSAGE", len)) {
 			set_server_quit_message(refnum, input);
 			RETURN_INT(1);
-#ifdef HAVE_SSL
-		} else if (!my_strnicmp(listc, "SSL", 1)) {
+		} else if (!my_strnicmp(listc, "SSL", len)) {
 			int value;
 
 			GET_INT_ARG(value, input);
-			set_server_enable_ssl(refnum, value);
+			set_server_try_ssl(refnum, value);
 			RETURN_INT(1);
-#endif
-		} else if (!my_strnicmp(listc, "UMODES", 6)) {
+		} else if (!my_strnicmp(listc, "UMODE", len)) {
 			RETURN_EMPTY;		/* Read only for now */
-		} else if (!my_strnicmp(listc, "UMODE", 2)) {
+		} else if (!my_strnicmp(listc, "UMODES", len)) {
 			RETURN_EMPTY;		/* Read only for now */
-		} else if (!my_strnicmp(listc, "USERHOST", 2)) {
+		} else if (!my_strnicmp(listc, "USERHOST", len)) {
 			set_server_userhost(refnum, input);
-		} else if (!my_strnicmp(listc, "VERSION", 1)) {
+		} else if (!my_strnicmp(listc, "VERSION", len)) {
 			set_server_version_string(refnum, input);
-		} else if (!my_strnicmp(listc, "005", 3)) {
+		} else if (!my_strnicmp(listc, "005", len)) {
 			GET_STR_ARG(listc1, input);
 			set_server_005(refnum, listc1, input);
 			RETURN_INT(!!*input);
 		}
-	} else if (!my_strnicmp(listc, "MATCH", 1)) {
-		RETURN_EMPTY;		/* Not implemented for now. */
-	} else if (!my_strnicmp(listc, "PMATCH", 1)) {
-		RETURN_EMPTY;		/* Not implemented for now. */
-	} else if (!my_strnicmp(listc, "GMATCH", 2)) {
+	} else if (!my_strnicmp(listc, "OMATCH", len)) {
 		int	i;
+		size_t	clue = 0;
 		char *retval = NULL;
 
-		for (i = 0; i < number_of_servers; i++) {
-			if (!my_stricmp(get_server_group(i), input))
-				m_s3cat(&retval, space, ltoa(i));
-		}
-		RETURN_STR(retval);
+		for (i = 0; i < number_of_servers; i++)
+			if (wild_match(input, get_server_name(i)))
+				m_sc3cat_s(&retval, space, ltoa(i), &clue);
+		RETURN_MSTR(retval);
+	} else if (!my_strnicmp(listc, "IMATCH", len)) {
+		int	i;
+		size_t	clue = 0;
+		char *retval = NULL;
+
+		for (i = 0; i < number_of_servers; i++)
+			if (wild_match(input, get_server_itsname(i)))
+				m_sc3cat_s(&retval, space, ltoa(i), &clue);
+		RETURN_MSTR(retval);
+	} else if (!my_strnicmp(listc, "GMATCH", len)) {
+		int	i;
+		size_t	clue = 0;
+		char *retval = NULL;
+
+		for (i = 0; i < number_of_servers; i++)
+			if (wild_match(input, get_server_group(i)))
+				m_sc3cat_s(&retval, space, ltoa(i), &clue);
+		RETURN_MSTR(retval);
+	} else if (!my_strnicmp(listc, "MAX", len)) {
+		RETURN_INT(number_of_servers);
 	} else
 		RETURN_EMPTY;
 
 	RETURN_EMPTY;
 }
+
+/*
+ * got_my_userhost -- callback function, XXXX doesnt belong here
+ * XXX Really does not belong here. 
+ */
+void 	got_my_userhost (int refnum, UserhostItem *item, const char *nick, const char *stuff)
+{
+	char *freeme;
+
+	freeme = m_3dup(item->user, "@", item->host);
+	set_server_userhost(refnum, freeme);
+	new_free(&freeme);
+}
+
+

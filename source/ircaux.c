@@ -1,4 +1,4 @@
-/* $EPIC: ircaux.c,v 1.55 2002/11/12 00:28:11 jnelson Exp $ */
+/* $EPIC: ircaux.c,v 1.55.2.1 2003/02/27 15:29:56 wd Exp $ */
 /*
  * ircaux.c: some extra routines... not specific to irc... that I needed 
  *
@@ -38,8 +38,8 @@
 #include "irc.h"
 #include "screen.h"
 #include <pwd.h>
-#include <sys/stat.h>
 #include <sys/wait.h>
+#include <math.h>
 #include "ircaux.h"
 #include "output.h"
 #include "term.h"
@@ -152,7 +152,7 @@ void *	really_new_malloc (size_t size, char *fn, int line)
 	char	*ptr;
 
 	if (!(ptr = (char *)malloc(size + sizeof(MO))))
-		panic("Malloc() failed, giving up!");
+		panic("Malloc() failed from [%s/%d], giving up!", fn, line);
 
 	/* Store the size of the allocation in the buffer. */
 	ptr += sizeof(MO);
@@ -250,6 +250,8 @@ void *	really_new_free(void **ptr, char *fn, int line)
 /* really_new_malloc in disguise */
 void *	really_new_realloc (void **ptr, size_t size, char *fn, int line)
 {
+	void *newptr = NULL;
+
 	if (!size) 
 		*ptr = really_new_free(ptr, fn, line);
 	else if (!*ptr)
@@ -260,11 +262,16 @@ void *	really_new_realloc (void **ptr, size_t size, char *fn, int line)
 		fatal_malloc_check(*ptr, NULL, fn, line);
 
 		/* Copy everything, including the MO buffer */
-		if (!(*ptr = (char *)realloc(mo_ptr(*ptr), size + sizeof(MO))))
-			panic("realloc() failed, giving up!");
+		if ((newptr = (char *)realloc(mo_ptr(*ptr), size + sizeof(MO))))
+		{
+			*ptr = newptr;
+		} else {
+			new_free(ptr);
+			panic("realloc() failed from [%s/%d], giving up!", fn, line);
+		}
 
 		/* Re-initalize the MO buffer; magic(*ptr) is already set. */
-		*ptr += sizeof(MO);
+		*ptr = (void *)((char *)*ptr + sizeof(MO));
 		alloc_size(*ptr) = size;
 #ifdef ALLOC_DEBUG
 		alloc_table.entries[mo_ptr(*ptr)->entry] = *ptr;
@@ -632,7 +639,7 @@ char *	rstristr (const char *source, const char *search)
 }
 
 
-char *	next_arg (char *str, char **new_ptr)
+char *	next_arg_count (char *str, char **new_ptr, int count)
 {
 	char	*ptr;
 
@@ -643,9 +650,13 @@ char *	next_arg (char *str, char **new_ptr)
 	while (isspace(*str))
 		str++;
 
-	ptr = str;
-	while (*ptr && !isspace(*ptr))
-		ptr++;
+	for (ptr = str; count > 0 && *ptr; count--)
+	{
+		while (isspace(*ptr))
+			ptr++;
+		while (*ptr && !isspace(*ptr))
+			ptr++;
+	}
 
 	if (!*ptr)
 		ptr = empty_string;		/* XXX sigh */
@@ -668,6 +679,9 @@ char *	remove_trailing_spaces (char *foo, size_t *cluep)
 	end = clue + foo + strlen(clue + foo) - 1;
 	while (end > foo && my_isspace(*end))
 		end--;
+	/* If this is a \, then it was a \ before a space.  Go forward */
+	if (end[0] == '\\' && my_isspace(end[1]))
+		end++;
 	end[1] = 0;
 	if (cluep) 
 		*cluep = end - foo;
@@ -732,6 +746,10 @@ char *	last_arg (char **src, size_t *cluep)
 
 #define risspace(c) (c == ' ')
 
+/*
+ * We seriously need to merge the complexity in this function with
+ * that of word_count().
+ */
 char *	new_next_arg (char *str, char **new_ptr)
 {
 	char	*ptr;
@@ -749,6 +767,8 @@ char *	new_next_arg (char *str, char **new_ptr)
 		{
 			if (*str == '\\' && str[1])
 				str++;
+			else if (str[1] && !risspace(str[1]))
+			{}
 			else if (*str == '"')
 			{
 				*str++ = 0;
@@ -756,10 +776,19 @@ char *	new_next_arg (char *str, char **new_ptr)
 					str++;
 				break;
 			}
+
+#if 0
+			if (!str[1])
+			{
+				ptr--;
+				goto noquotedword;
+			}
+#endif
 		}
 	}
 	else
 	{
+noquotedword:
 		str = ptr;
 		while (*str && !risspace(*str))
 			str++;
@@ -776,7 +805,43 @@ char *	new_next_arg (char *str, char **new_ptr)
 	return ptr;
 }
 
+/*
+ * Return multiple arguments using new_next_arg().
+ *
+ * This is just a little bit of a crock.  The basic problem here is the
+ * dequoting which will dispose of the distinction between the words,
+ * but presumably that's what we want.  Also, note that stpcpy isn't
+ * supposed to be used with overlapping blocks, but since new_next_arg
+ * always returns an equal or shorter string, it should work.  (since
+ * str1 <= str).
+ */
+char *	new_next_arg_count (char *str, char **new_ptr, int count)
+{
+	char *ret = str;
+	char *str1 = str;
+	*new_ptr = str;
 
+	while (count-- > 0 && *new_ptr && **new_ptr)
+	{
+		str = new_next_arg(*new_ptr, new_ptr);
+		if (str)
+		{
+			str = LOCAL_COPY(str);
+			if (str1 != ret)
+				str1 = stpcpy(str1, space);
+			str1 = stpcpy(str1, str);
+		}
+	}
+
+	return ret;
+}
+
+char * next_quoted_args (char *str, char **new_ptr, int count)
+{
+	return NULL;
+}
+
+#if 0
 /*
  * This function is "safe" because it doesnt ever return NULL.
  * XXX - this is an ugly kludge that needs to go away
@@ -833,6 +898,19 @@ char *	safe_new_next_arg (char *str, char **new_ptr)
 	return ptr;
 }
 
+#else
+
+/*
+ * Note that the old version is now out of sync with epics word philosophy.
+ */
+char *	safe_new_next_arg (char *str, char **new_ptr)
+{
+	char * ret = new_next_arg(str, new_ptr);
+
+	return ret ? ret : empty_string;
+}
+
+#endif
 
 char *	new_new_next_arg (char *str, char **new_ptr, char *type)
 {
@@ -899,12 +977,17 @@ char *	s_next_arg (char **from)
 
 char *	next_in_comma_list (char *str, char **after)
 {
+	return next_in_div_list(str, after, ',');
+}
+
+char *	next_in_div_list (char *str, char **after, char div)
+{
 	*after = str;
 
-	while (*after && **after && **after != ',')
+	while (*after && **after && **after != div)
 		(*after)++;
 
-	if (*after && **after == ',')
+	if (*after && **after == div)
 	{
 		**after = 0;
 		(*after)++;
@@ -1628,6 +1711,10 @@ char*	exec_pipe (char *executable, char *input, size_t *len, char**args)
 	case -1:
 		yell("Cannot fork for %s: %s", 
 				executable, strerror(errno));
+		close(pipe0[0]);
+		close(pipe0[1]);
+		close(pipe1[0]);
+		close(pipe1[1]);
 		return ret;
 	case 0:
 		dup2(pipe0[0], 0);
@@ -1696,6 +1783,95 @@ char*	exec_pipe (char *executable, char *input, size_t *len, char**args)
 	}
 	*len = rdpos;
 	return ret;
+}
+
+/*
+ * exec() something and return three FILE's.
+ *
+ * On failure, close everything and return NULL.
+ */
+FILE **	open_exec (char *executable, char **args)
+{
+static	FILE *	file_pointers[3];
+	int 	pipe0[2] = {-1, -1};
+	int 	pipe1[2] = {-1, -1};
+	int 	pipe2[2] = {-1, -1};
+
+	if (pipe(pipe0) == -1 || pipe(pipe1) == -1 || pipe(pipe2) == -1)
+	{
+		yell("Cannot open exec pipes: %s\n", strerror(errno));
+		close(pipe0[0]);
+		close(pipe0[1]);
+		close(pipe1[0]);
+		close(pipe1[1]);
+		close(pipe2[0]);
+		close(pipe2[1]);
+		return NULL;
+	}
+
+	switch (fork())
+	{
+		case -1:
+		{
+			yell("Cannot fork for exec: %s\n", 
+					strerror(errno));
+			close(pipe0[0]);
+			close(pipe0[1]);
+			close(pipe1[0]);
+			close(pipe1[1]);
+			close(pipe2[0]);
+			close(pipe2[1]);
+			return NULL;
+		}
+		case 0:
+		{
+			dup2(pipe0[0], 0);
+			dup2(pipe1[1], 1);
+			dup2(pipe2[1], 2);
+			close(pipe0[1]);
+			close(pipe1[0]);
+			close(pipe2[0]);
+			setuid(getuid());
+			setgid(getgid());
+			execvp(executable, args);
+			_exit(0);
+		}
+		default :
+		{
+			close(pipe0[0]);
+			close(pipe1[1]);
+			close(pipe2[1]);
+			if (!(file_pointers[0] = fdopen(pipe0[1], "w")))
+			{
+				yell("Cannot open exec STDIN: %s\n", 
+						strerror(errno));
+				close(pipe0[1]);
+				close(pipe1[0]);
+				close(pipe2[0]);
+				return NULL;
+			}
+			if (!(file_pointers[1] = fdopen(pipe1[0], "r")))
+			{
+				yell("Cannot open exec STDOUT: %s\n", 
+						strerror(errno));
+				fclose(file_pointers[0]);
+				close(pipe1[0]);
+				close(pipe2[0]);
+				return NULL;
+			}
+			if (!(file_pointers[2] = fdopen(pipe2[0], "r")))
+			{
+				yell("Cannot open exec STDERR: %s\n", 
+						strerror(errno));
+				fclose(file_pointers[0]);
+				fclose(file_pointers[1]);
+				close(pipe2[0]);
+				return NULL;
+			}
+			break;
+		}
+	}
+	return file_pointers;
 }
 
 static FILE *	open_compression (char *executable, char *filename)
@@ -1768,7 +1944,7 @@ static 	Filename 	path_to_bunzip2;
 	int 		ok_to_decompress 		= 0;
 	Filename	fullname;
 	Filename	candidate;
-	struct stat 	file_info;
+	Stat 		file_info;
 	FILE *		doh;
 
 	if (!setup)
@@ -1953,13 +2129,13 @@ error_cleanup:
  */ 
 int	slurp_file (char **buffer, char *filename)
 {
-	char *		local_buffer;
-	size_t		offset;
-	off_t		local_buffer_size;
-	off_t		file_size;
-	struct stat	s;
-	FILE *		file;
-	size_t		count;
+	char *	local_buffer;
+	size_t	offset;
+	off_t	local_buffer_size;
+	off_t	file_size;
+	Stat	s;
+	FILE *	file;
+	size_t	count;
 
 	file = uzfopen(&filename, get_string_var(LOAD_PATH_VAR), 1);
 	if (stat(filename, &s) < 0)
@@ -2052,7 +2228,7 @@ int 	opento(const char *filename, int flags, off_t position)
 /* swift and easy -- returns the size of the file */
 off_t 	file_size (const char *filename)
 {
-	struct stat statbuf;
+	Stat statbuf;
 
 	if (!stat(filename, &statbuf))
 		return (off_t)(statbuf.st_size);
@@ -2070,7 +2246,7 @@ int	file_exists (const char *filename)
 
 int	isdir (const char *filename)
 {
-	struct stat statbuf;
+	Stat statbuf;
 
 	if (!stat(filename, &statbuf))
 	{
@@ -2081,9 +2257,9 @@ int	isdir (const char *filename)
 }
 
 /* Gets the time in second/usecond if you can,  second/0 if you cant. */
-struct timeval 	get_time (struct timeval *timer)
+Timeval get_time (Timeval *timer)
 {
-	static struct timeval timer2;
+	static Timeval timer2;
 
 #ifdef HAVE_GETTIMEOFDAY
 	if (timer)
@@ -2113,9 +2289,9 @@ struct timeval 	get_time (struct timeval *timer)
  * gotten probably with a call to get_time.  'one' should be the older
  * timer and 'two' should be the most recent timer.
  */
-double 	time_diff (struct timeval one, struct timeval two)
+double 	time_diff (Timeval one, Timeval two)
 {
-	struct timeval td;
+	Timeval td;
 
 	td.tv_sec = two.tv_sec - one.tv_sec;
 	td.tv_usec = two.tv_usec - one.tv_usec;
@@ -2123,9 +2299,9 @@ double 	time_diff (struct timeval one, struct timeval two)
 	return (double)td.tv_sec + ((double)td.tv_usec / 1000000.0);
 }
 
-struct timeval double_to_timeval (double x)
+Timeval double_to_timeval (double x)
 {
-	struct timeval td;
+	Timeval td;
 	time_t	s;
 
 	s = (time_t) x;
@@ -2142,9 +2318,9 @@ struct timeval double_to_timeval (double x)
  * gotten probably with a call to get_time.  'one' should be the older
  * timer and 'two' should be the most recent timer.
  */
-struct timeval 	time_subtract (struct timeval one, struct timeval two)
+Timeval time_subtract (Timeval one, Timeval two)
 {
-	struct timeval td;
+	Timeval td;
 
 	td.tv_sec = two.tv_sec - one.tv_sec;
 	td.tv_usec = two.tv_usec - one.tv_usec;
@@ -2159,9 +2335,9 @@ struct timeval 	time_subtract (struct timeval one, struct timeval two)
 /* 
  * Adds the interval "two" to the base time "one" and returns it.
  */
-struct timeval 	time_add (struct timeval one, struct timeval two)
+Timeval time_add (Timeval one, Timeval two)
 {
-	struct timeval td;
+	Timeval td;
 
 	td.tv_usec = one.tv_usec + two.tv_usec;
 	td.tv_sec = one.tv_sec + two.tv_sec;
@@ -2212,7 +2388,7 @@ char *	ftoa (double foo)
 	extern double fmod (double, double);
 
 	if (get_int_var(FLOATING_POINT_MATH_VAR)) {
-		sprintf(buffer, "%.50g", foo);
+		sprintf(buffer, "%.*g", get_int_var(FLOATING_POINT_PRECISION_VAR), foo);
 	} else {
 		foo -= fmod(foo, 1);
 		sprintf(buffer, "%.0f", foo);
@@ -2459,16 +2635,23 @@ int 	check_val (char *sub)
 		return 0;
 
 	/* get the numeric value (if any). */
+	errno = 0;
 	sval = strtod(sub, &endptr);
 
-	/* Its OK if:
-	 *  1) the f-val is not zero.
-	 *  2) the first invalid character was not a null.
-	 *  3) there were no valid f-chars.
-	 */
-	if (sval || *endptr || (sub == endptr))
+	/* Numbers that cause exceptional conditions in strtod() are true */
+	if (errno == ERANGE || isinf(sval) || isnan(sval))
 		return 1;
 
+	/* 
+	 * - Any string with no leading number
+	 * - Any string containing anything after a leading number
+	 * - Any string wholly containing a non-zero number
+	 * are all true.
+	 */
+	if (sub == endptr || *endptr || sval != 0.0)
+		return 1;
+
+	/* Basically that leaves empty strings and the number 0 as false. */
 	return 0;
 }
 
@@ -2695,8 +2878,8 @@ char *	get_userhost (void)
 /* Fancy attempt to compensate for broken time_t's */
 double	time_to_next_minute (void)
 {
-	static	int 	which = 0;
-	struct timeval	now, then;
+static	int 	which = 0;
+	Timeval	now, then;
 
 	get_time(&now);
 
@@ -3416,15 +3599,15 @@ size_t	mangle_line	(char *incoming, int how, size_t how_much)
 static	unsigned long	randm (unsigned long l)
 {
 	/* patch from Sarayan to make $rand() better */
-static	const	long	RAND_A = 16807L;
-static	const	long	RAND_M = 2147483647L;
-static	const	long	RAND_Q = 127773L;
-static	const	long	RAND_R = 2836L;
-static		u_long	z = 0;
-		long	t;
+static	const	long		RAND_A = 16807L;
+static	const	long		RAND_M = 2147483647L;
+static	const	long		RAND_Q = 127773L;
+static	const	long		RAND_R = 2836L;
+static		unsigned long	z = 0;
+		long		t;
 
 	if (z == 0)
-		z = (u_long) getuid();
+		z = (unsigned long) getuid();
 
 	if (l == 0)
 	{
@@ -3438,7 +3621,7 @@ static		u_long	z = 0;
 	else
 	{
 		if ((long) l < 0)
-			z = (u_long) getuid();
+			z = (unsigned long) getuid();
 		else
 			z = l;
 		return 0;
@@ -3454,7 +3637,8 @@ static		u_long	z = 0;
  */
 static unsigned long randt_2 (void)
 {
-	struct timeval 	tp1;
+	Timeval tp1;
+
 	get_time(&tp1);
 	return (unsigned long) tp1.tv_usec;
 }
@@ -3626,6 +3810,107 @@ char *	urldecode (char *s, size_t *length)
 	return memcpy(s, retval, p2 - retval + 1);
 }
 
+/*
+ * quote_it: This quotes the given string making it sendable via irc.  A
+ * pointer to the length of the data is required and the data need not be
+ * null terminated (it can contain nulls).  Returned is a malloced, null
+ * terminated string.
+ */
+char	*enquote_it (char *str, size_t len)
+{
+	char	*buffer = new_malloc(len + 5);
+	char	*ptr = buffer;
+	int	i;
+	int	size = len;
+
+	for (i = 0; i < len; i++)
+	{
+		if (ptr-buffer >= size)
+		{
+			int j = ptr-buffer;
+			size += 256;
+			RESIZE(buffer, char, size + 5);
+			ptr = buffer + j;
+		}
+
+		switch (str[i])
+		{
+			case CTCP_DELIM_CHAR:	*ptr++ = CTCP_QUOTE_CHAR;
+						*ptr++ = 'a';
+						break;
+			case '\n':		*ptr++ = CTCP_QUOTE_CHAR;
+						*ptr++ = 'n';
+						break;
+			case '\r':		*ptr++ = CTCP_QUOTE_CHAR;
+						*ptr++ = 'r';
+						break;
+			case CTCP_QUOTE_CHAR:	*ptr++ = CTCP_QUOTE_CHAR;
+						*ptr++ = CTCP_QUOTE_CHAR;
+						break;
+			case '\0':		*ptr++ = CTCP_QUOTE_CHAR;
+						*ptr++ = '0';
+						break;
+			default:		*ptr++ = str[i];
+						break;
+		}
+	}
+	*ptr = '\0';
+	return buffer;
+}
+
+/*
+ * ctcp_unquote_it: This takes a null terminated string that had previously
+ * been quoted using ctcp_quote_it and unquotes it.  Returned is a malloced
+ * space pointing to the unquoted string.  NOTE: a trailing null is added for
+ * convenied, but the returned data may contain nulls!.  The len is modified
+ * to contain the size of the data returned. 
+ */
+char	*dequote_it (char *str, size_t *len)
+{
+	char	*buffer;
+	char	*ptr;
+	char	c;
+	int	i,
+		new_size = 0;
+
+	buffer = (char *) new_malloc(sizeof(char) * *len + 1);
+	ptr = buffer;
+	i = 0;
+	while (i < *len)
+	{
+		if ((c = str[i++]) == CTCP_QUOTE_CHAR)
+		{
+			switch (c = str[i++])
+			{
+				case CTCP_QUOTE_CHAR:
+					*ptr++ = CTCP_QUOTE_CHAR;
+					break;
+				case 'a':
+					*ptr++ = CTCP_DELIM_CHAR;
+					break;
+				case 'n':
+					*ptr++ = '\n';
+					break;
+				case 'r':
+					*ptr++ = '\r';
+					break;
+				case '0':
+					*ptr++ = '\0';
+					break;
+				default:
+					*ptr++ = c;
+					break;
+			}
+		}
+		else
+			*ptr++ = c;
+		new_size++;
+	}
+	*ptr = '\0';
+	*len = new_size;
+	return (buffer);
+}
+
 unsigned char isspace_table [256] = 
 {
 	0,	0,	0,	0,	0,	0,	0,	0,
@@ -3737,6 +4022,8 @@ int	word_count (const char *ptr)
 			{
 				if (*ptr == '\\' && ptr[1])
 					ptr++;
+				else if (ptr[1] && !risspace(ptr[1]))
+				{}
 				else if (*ptr == '"')
 				{
 					ptr++;

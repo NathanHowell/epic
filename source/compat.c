@@ -1,4 +1,4 @@
-/* $EPIC: compat.c,v 1.13 2002/10/22 23:18:44 jnelson Exp $ */
+/* $EPIC: compat.c,v 1.13.2.1 2003/02/27 15:29:55 wd Exp $ */
 /*
  * Everything that im not directly responsible for I put in here.  Almost
  * all of this stuff is either borrowed from somewhere else (for you poor
@@ -164,7 +164,7 @@ static int popnum(int *num)
 	return 1;
 }
 
-static int cvtchar(char *sp, char *c)
+static int cvtchar (const char *sp, char *c)
 {
 	switch(*sp) {
 	case '\\':
@@ -1047,9 +1047,9 @@ static void	bsd_arc4_stir (ARC4 *as)
 {
 	int     fd;
 	struct {
-		struct timeval tv;
+		Timeval tv;
 		pid_t 	pid;
-		u_char	rnd[128 - sizeof(struct timeval) - sizeof(pid_t)];
+		u_char	rnd[128 - sizeof(Timeval) - sizeof(pid_t)];
 	}       rdat;
 
 	gettimeofday(&rdat.tv, NULL);
@@ -1196,7 +1196,7 @@ char *	my_realpath (const char *pathname, char resolved_path[MAXPATHLEN])
 {
 	char *mypath;
 	char *rest;
-	struct stat unused;
+	Stat unused;
 
 	/* If the file exists, just run realpath on it. */
 	if (stat(pathname, &unused) == 0)

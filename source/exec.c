@@ -1,4 +1,4 @@
-/* $EPIC: exec.c,v 1.10 2002/11/08 23:36:12 jnelson Exp $ */
+/* $EPIC: exec.c,v 1.10.2.1 2003/02/27 15:29:55 wd Exp $ */
 /*
  * exec.c: handles exec'd process for IRCII 
  *
@@ -93,6 +93,7 @@ static	int	process_list_size = 0;
 static 	void 	handle_filedesc 	(Process *, int *, int, int);
 static 	void 	cleanup_dead_processes 	(void);
 static 	void 	ignore_process 		(int index);
+static 	void 	close_in		(int index);
 static 	void 	kill_process 		(int, int);
 static 	void 	kill_all_processes 	(int signo);
 static 	int 	valid_process_index 	(int proccess);
@@ -179,7 +180,7 @@ BUILT_IN_COMMAND(execcmd)
 		 */
 		if (my_strnicmp(flag, "OUT", len) == 0)
 		{
-			if (doing_privmsg())
+			if (get_server_doing_privmsg(from_server))
 				redirect = "NOTICE";
 			else
 				redirect = "PRIVMSG";
@@ -221,7 +222,7 @@ BUILT_IN_COMMAND(execcmd)
 		 */
 		else if (my_strnicmp(flag, "MSG", len) == 0)
 		{
-			if (doing_privmsg())
+			if (get_server_doing_privmsg(from_server))
 				redirect = "NOTICE";
 			else
 				redirect = "PRIVMSG";
@@ -288,6 +289,19 @@ BUILT_IN_COMMAND(execcmd)
 				return;
 
 			ignore_process(i);
+			return;
+		}
+
+		/*
+		 * /EXEC -CLOSEIN close the processes STDIN,
+		 * in the hope that it will take the hint.
+		 */
+		else if (my_strnicmp(flag, "CLOSEIN", len) == 0)
+		{
+			if ((i = get_process_index(&args)) == -1)
+				return;
+
+			close_in(i);
 			return;
 		}
 
@@ -432,6 +446,19 @@ say("Output from process %d (%s) now going to you", i, proc->name);
 			else 
 				say("The name %s is not unique!", logical);
 		}
+
+		/*
+		 * Change the stdout and stderr lines _if_ they are given.
+		 */
+		if (stdoutc)
+			malloc_strcpy(&proc->stdoutc, stdoutc);
+		if (stdoutpc)
+			malloc_strcpy(&proc->stdoutpc, stdoutpc);
+		if (stderrc)
+			malloc_strcpy(&proc->stderrc, stderrc);
+		if (stderrpc)
+			malloc_strcpy(&proc->stderrpc, stderrpc);
+
 		message_to(0);
 	}
 
@@ -671,7 +698,7 @@ say("Output from process %d (%s) now going to you", i, proc->name);
  * are closed.  If EOF has been asserted on both, then  we mark the process
  * as being "dumb".  Once it is reaped (exited), it is expunged.
  */
-void 		do_processes (fd_set *rd)
+void 		do_processes (fd_set *rd, fd_set *wd)
 {
 	int	i;
 	int	limit;
@@ -717,7 +744,7 @@ static void 	handle_filedesc (Process *proc, int *fd, int hook_nonl, int hook_nl
 	char 	exec_buffer[IO_BUFFER_SIZE + 1];
 	int	len;
 
-	switch ((len = dgets(exec_buffer, *fd, 0)))	/* No buffering! */
+	switch ((len = dgets(exec_buffer, *fd, 0, NULL))) /* No buffering! */
 	{
 		case -1:	/* Something died */
 		{
@@ -754,12 +781,16 @@ static void 	handle_filedesc (Process *proc, int *fd, int hook_nonl, int hook_nl
 					proc->index, exec_buffer);
 
 			set_prompt_by_refnum(proc->refnum, exec_buffer);
-			update_input(UPDATE_ALL);
 			break;
 		}
 		default:	/* We got a full line */
-		{
 this_sucks:
+		{
+			int ofs;
+
+			ofs = from_server;
+			if (proc->refnum)
+				from_server = proc->server;
 			message_to(proc->refnum);
 			proc->counter++;
 
@@ -795,6 +826,7 @@ this_sucks:
 			}
 
 			message_to(0);
+			from_server = ofs;
 		}
 	}
 }
@@ -897,6 +929,7 @@ void 		clean_up_processes (void)
 		say("Closing all left over exec's");
 		kill_all_processes(SIGTERM);
 		sleep(2);
+		get_child_exit(-1);
 		kill_all_processes(SIGKILL);
 	}
 }
@@ -931,19 +964,6 @@ int 		text_to_process (int proc_index, const char *text, int show)
 	set_prompt_by_refnum(proc->refnum, empty_string);
 
 	return (0);
-}
-
-/*
- * When a server goes away, re-assign all of the /exec's that are
- * current bound to that server.
- */
-void 		exec_server_delete (int i)
-{
-	int	j;
-
-	for (j = 0; j < process_list_size; j++)
-		if (process_list[j] && process_list[j]->server >= i)
-			process_list[j]->server--;
 }
 
 /*
@@ -1134,6 +1154,23 @@ static void 	ignore_process (int index)
 		proc->p_stderr = new_close(proc->p_stderr);
 
 	proc->dumb = 1;
+}
+
+/*
+ * close_in:  When we are finished with the process but still want the
+ * rest of its output, we close its input, and hopefully it will get the
+ * message and close up shop.
+ */
+static void 	close_in (int index)
+{
+	Process *proc;
+
+	if (valid_process_index(index) == 0)
+		return;
+
+	proc = process_list[index];
+	if (proc->p_stdin != -1)
+		proc->p_stdin = new_close(proc->p_stdin);
 }
 
 

@@ -1,4 +1,4 @@
-/* $EPIC: lastlog.c,v 1.13 2002/07/17 22:52:52 jnelson Exp $ */
+/* $EPIC: lastlog.c,v 1.13.2.1 2003/02/27 15:29:56 wd Exp $ */
 /*
  * lastlog.c: handles the lastlog features of irc. 
  *
@@ -42,6 +42,7 @@
 #include "ircaux.h"
 #include "output.h"
 #include "numbers.h"
+#include "functions.h"
 #include <regex.h>
 
 static int	show_lastlog (Lastlog **l, int *skip, int *number, int, char *match, regex_t *reg, int *max);
@@ -330,6 +331,7 @@ BUILT_IN_COMMAND(lastlog)
 	Lastlog *	start;
 	Lastlog *	end;
 	Lastlog *	l;
+	Lastlog *	lastshown;
 	regex_t 	realreg;
 	regex_t *	reg = NULL;
 	int		cnt;
@@ -422,10 +424,10 @@ BUILT_IN_COMMAND(lastlog)
 
 		x = new_next_arg(args, &args);
 		before_str = x;
-		if ((after_str = strchr(x, ',')))
+		if (x && (after_str = strchr(x, ',')))
 			*after_str++ = 0;
 
-		if (!is_number(before_str))
+		if (!x || !is_number(before_str))
 		{
 			yell("LASTLOG -CONTEXT requires a numeric argument.");
 			goto bail;
@@ -576,7 +578,7 @@ BUILT_IN_COMMAND(lastlog)
 
 	/* Iterate over the lastlog here */
 	if (header)
-		file_put_it(outfp, "%s Lastlog:", numeric_banner());
+		file_put_it(outfp, "%s Lastlog:", banner());
 
 	/*
 	 * Ugh.  This is way too complicated for its own good.  Let's
@@ -612,35 +614,50 @@ BUILT_IN_COMMAND(lastlog)
 		start = start->older;
 	    }
 
+	    lastshown = NULL;
 	    for (l = start; l; (void)(l && (l = l->newer)))
 	    {
 		if (show_lastlog(&l, &skip, &number, level_mask, 
 				match, reg, &max))
 		{
-		    if (show_separator)
-		    {
-			file_put_it(outfp, "%s", separator);
-			show_separator = 0;
-		    }
-
 		    if (counter == 0 && before > 0)
 		    {
 			int i;
 
+			counter = 1;
 			for (i = 0; i < before; i++)
-			     if (l && l->older)
-				l = l->older;
-			counter = before + 1;
+			{
+			    if (l && l == lastshown)
+			    {
+				if (l->newer)
+				    l = l->newer;
+				show_separator = 0;
+				break;
+			    }
 
+			    if (l && l->older)
+			    {
+				l = l->older;
+				counter++;
+			    }
+			}
 		    }
 		    else if (after != -1)
 			counter = after + 1;
 		    else
 			counter = 1;
+
+		    if (show_separator)
+		    {
+			file_put_it(outfp, "%s", separator);
+			show_separator = 0;
+		    }
 		}
+
 		if (counter)
 		{
 			file_put_it(outfp, "%s", l->msg);
+			lastshown = l;
 			counter--;
 			if (counter == 0 && before != -1 && separator)
 				show_separator = 1;
@@ -663,33 +680,49 @@ BUILT_IN_COMMAND(lastlog)
 		end = end->older;
 	    }
 
+	    lastshown = NULL;
 	    for (l = start; l; (void)(l && (l = l->older)))
 	    {
 		if (show_lastlog(&l, &skip, &number, level_mask, 
 				match, reg, &max))
 		{
-		    if (show_separator)
-		    {
-			file_put_it(outfp, "%s", separator);
-			show_separator = 0;
-		    }
-
 		    if (counter == 0 && before > 0)
 		    {
 			int i;
+
+			counter = 1;
 			for (i = 0; i < before; i++)
-			     if (l && l->newer)
+			{
+			    if (l && l == lastshown)
+			    {
+				if (l->older)
+				    l = l->older;
+				show_separator = 0;
+				break;
+			    }
+
+			    if (l && l->newer)
+			    {
 				l = l->newer;
-			counter = before + 1;
+				counter++;
+			    }
+			}
 		    }
 		    else if (after != -1)
 			counter = after + 1;
 		    else
 			counter = 1;
+
+		    if (show_separator)
+		    {
+			file_put_it(outfp, "%s", separator);
+			show_separator = 0;
+		    }
 		}
 		if (counter)
 		{
 			file_put_it(outfp, "%s", l->msg);
+			lastshown = l;
 			counter--;
 			if (counter == 0 && before != -1 && separator)
 				show_separator = 1;
@@ -699,7 +732,7 @@ BUILT_IN_COMMAND(lastlog)
 	    }
 	}
 	if (header)
-		file_put_it(outfp, "%s End of Lastlog", numeric_banner());
+		file_put_it(outfp, "%s End of Lastlog", banner());
 bail:
 	if (outfp)
 		fclose(outfp);
@@ -831,12 +864,14 @@ void	set_current_window_level (char *str)
 			bits_to_lastlog_level(current_window_level));
 }
 
+#if 0
 #define EMPTY empty_string
 #define RETURN_EMPTY return m_strdup(EMPTY)
 #define RETURN_IF_EMPTY(x) if (empty( x )) RETURN_EMPTY
 #define GET_INT_ARG(x, y) {RETURN_IF_EMPTY(y); x = my_atol(safe_new_next_arg(y, &y));}
 #define GET_STR_ARG(x, y) {RETURN_IF_EMPTY((y)); x = new_next_arg((y), &(y));RETURN_IF_EMPTY((x));}
 #define RETURN_STR(x) return m_strdup(x ? x : EMPTY);
+#endif
 
 /*
  * $line(<line number> [window number])

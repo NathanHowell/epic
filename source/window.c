@@ -1,4 +1,4 @@
-/* $EPIC: window.c,v 1.47 2002/11/08 23:36:13 jnelson Exp $ */
+/* $EPIC: window.c,v 1.47.2.1 2003/02/27 15:29:57 wd Exp $ */
 /*
  * window.c: Handles the organzation of the logical viewports (``windows'')
  * for irc.  This includes keeping track of what windows are open, where they
@@ -56,9 +56,6 @@
 #include "parse.h"
 #include "commands.h"
 #include "exec.h"
-#ifdef HAVE_SSL
-#include "ssl.h"
-#endif
 
 static char *onoff[] = { "OFF", "ON" };
 
@@ -102,16 +99,6 @@ const	char	*who_from = (char *) 0;
  * determines what window output ultimately ends up in.
  */
 	int	who_level = LOG_CRAP;
-
-/*
- * This is set when we enter the /window command, and cleared when we exit.
- * It is possible for output to occur as a result of a /window command, but
- * the state of the windows may be indeterminite (because they changed size
- * or location perhaps), so when output occurs and this is set, a full update
- * of all the windows occurs, before the output, so that everything goes to
- * wherever it belongs.
- */ 
-	int	in_window_command = 0;
 
 /*
  * This is set to 1 if output is to be dispatched normally.  This is set to
@@ -174,15 +161,14 @@ Window	*new_window (Screen *screen)
 	if (current_window)
 		new_w->server = current_window->server;
 	else
-		new_w->server = -1;
-	new_w->last_server = -1;
+		new_w->server = NOSERV;
+	new_w->last_server = NOSERV;
 
 	new_w->top = 0;			/* Filled in later */
 	new_w->bottom = 0;		/* Filled in later */
 	new_w->cursor = -1;		/* Force a clear-screen */
 	new_w->noscrollcursor = -1;
 	new_w->absolute_size = 0;
-	new_w->line_cnt = 0;
 	new_w->old_size = 1;		/* Filled in later */
 	new_w->update = 0;
 	new_w->miscflags = 0;
@@ -210,9 +196,7 @@ Window	*new_window (Screen *screen)
 
 	new_w->top_of_scrollback = NULL;	/* Filled in later */
 	new_w->top_of_display = NULL;		/* Filled in later */
-#if 0
-	new_w->ceiling_of_display = NULL;	/* Filled in later */
-#endif
+	new_w->scrollback_point = NULL;		/* Filled in later */
 	new_w->display_ip = NULL;		/* Filled in later */
 	new_w->display_buffer_size = 0;
 	new_w->display_buffer_max = get_int_var(SCROLLBACK_VAR);
@@ -222,6 +206,7 @@ Window	*new_window (Screen *screen)
 	new_w->hold_mode = 0;
 	new_w->autohold = 0;
 	new_w->hold_interval = 10;
+	new_w->lines_held = 0;
 
 	new_w->waiting_channel = NULL;
 	new_w->current_channel = NULL;
@@ -251,9 +236,6 @@ Window	*new_window (Screen *screen)
 	new_w->display_buffer_size = 1;
 	new_w->display_ip = new_w->top_of_scrollback;
 	new_w->top_of_display = new_w->top_of_scrollback;
-#if 0
-	new_w->ceiling_of_display = new_w->top_of_display;
-#endif
 	new_w->old_size = 1;
 
 	if (screen)
@@ -296,6 +278,7 @@ Window	*new_window (Screen *screen)
 void 	delete_window (Window *window)
 {
 	char 	buffer[BIG_BUFFER_SIZE + 1];
+	int	oldref;
 	int	i;
 	int	invisible = 0;
 
@@ -428,6 +411,7 @@ delete_window_contents:
 		strmcpy(buffer, window->name, BIG_BUFFER_SIZE);
 	else
 		strmcpy(buffer, ltoa(window->refnum), BIG_BUFFER_SIZE);
+	oldref = window->refnum;
 
 
 	/*
@@ -497,7 +481,7 @@ delete_window_contents:
 #endif
 	if (dead == 0)
 		window_check_servers();
-	do_hook(WINDOW_KILL_LIST, "%s", buffer);
+	do_hook(WINDOW_KILL_LIST, "%d %s", oldref, buffer);
 }
 
 /*
@@ -870,7 +854,6 @@ static void 	swap_window (Window *v_window, Window *window)
 	window_body_needs_redraw(window);
 	window_statusbar_needs_redraw(window);
 	window->miscflags &= ~WINDOW_NOTIFIED;
-	update_input(UPDATE_ALL);
 
 	/*
 	 * Transfer current_window if the current window is being swapped out
@@ -1111,11 +1094,7 @@ void	resize_window_display (Window *window)
 		{
 			for (i = 0; i < cnt; i++)
 			{
-				if (!tmp || !tmp->prev
-#if 0
-				    || tmp == window->ceiling_of_display
-#endif
-								)
+				if (!tmp || !tmp->prev)
 					break;
 				tmp = tmp->prev;
 			}
@@ -1217,9 +1196,7 @@ void 	update_all_status (void)
 void 	update_all_windows (void)
 {
 	Window	*tmp = NULL;
-
-	if (in_window_command)
-		return;
+	int	do_input_too = 0;
 
 	while (traverse_all_windows(&tmp))
 	{
@@ -1237,15 +1214,21 @@ void 	update_all_windows (void)
 			repaint_window_body(tmp);
 
 		if (tmp->update & REDRAW_STATUS)
-			make_status(tmp, 1);
+		{
+			if (!make_status(tmp, 1))
+			    tmp->update &= ~REDRAW_STATUS;
+			do_input_too = 1;
+		}
 		else if (tmp->update & UPDATE_STATUS)
-			make_status(tmp, 0);
-
-		/* XXX - But what about if something failed? */
-		tmp->update = 0;
+		{
+			if (!make_status(tmp, 0))
+			    tmp->update &= ~UPDATE_STATUS;
+			do_input_too = 1;
+		}
 	}
 
-	update_input(UPDATE_JUST_CURSOR);
+	if (do_input_too)
+		update_input(UPDATE_JUST_CURSOR);
 }
 
 /****************************************************************************/
@@ -1368,6 +1351,8 @@ void 	recalculate_windows (Screen *screen)
 			if (tmp->display_size < 0)
 				tmp->display_size = 1;
 			excess_li -= offset;
+			resize_window_display(tmp);
+			recalculate_window_cursor_and_display_ip(tmp);
 		}
 	}
 
@@ -1532,8 +1517,10 @@ Window *get_window_by_desc (const char *stuff)
 {
 	Window	*w = NULL;	/* bleh */
 
+/*
 	while (*stuff == '#')
 		stuff++;
+*/
 
 	if ((w = get_window_by_name(stuff)))
 		return w;
@@ -1653,15 +1640,15 @@ static	Window	*get_previous_window (Window *w)
  */
 int 	is_window_visible (char *arg)
 {
-	Window	*tmp;
+	Window	*win;
 
-	if (is_number(arg))
+	if ((win = get_window_by_desc(arg)))
 	{
-		if ((tmp = get_window_by_refnum(my_atol(arg))) != NULL)
-			return (tmp->screen) ? 1 : 0;
+		if (win->screen)
+			return 1;
+		else
+			return 0;
 	}
-	if ((tmp = get_window_by_name(arg)) != NULL)
-		return (tmp->screen) ? 1 : 0;
 
 	return -1;
 }
@@ -1669,7 +1656,7 @@ int 	is_window_visible (char *arg)
 /* 
  * XXXX i have no idea if this belongs here.
  */
-char *	get_status_by_refnum(unsigned refnum, int line)
+char *	get_status_by_refnum (unsigned refnum, int line)
 {
 	Window *the_window;
 
@@ -1700,6 +1687,7 @@ void 	set_prompt_by_refnum (unsigned refnum, char *prompt)
 	if (!(tmp = get_window_by_refnum(refnum)))
 		tmp = current_window;
 	malloc_strcpy(&tmp->prompt, prompt);
+	update_input(UPDATE_JUST_CURSOR);
 }
 
 /* get_prompt_by_refnum: returns the prompt for the given window refnum */
@@ -1926,7 +1914,7 @@ void	change_window_server (int old_server, int new_server)
 			 * our responsibility.  But if we are disconnecting
 			 * then if we don't do it, nobody can.
 			 */
-			if (new_server == -1)
+			if (new_server == NOSERV)
 				window_discon(tmp, NULL);	/* XXXh */
 #endif
 		}
@@ -1938,12 +1926,12 @@ void	change_window_server (int old_server, int new_server)
 	tmp = NULL;
 	while (traverse_all_windows(&tmp))
 	{
-		if (tmp->server != -1)
+		if (tmp->server != NOSERV)
 			continue;
 		if (tmp->last_server != old_server)
 			continue;
 		tmp->server = new_server;
-		tmp->last_server = -1;
+		tmp->last_server = NOSERV;
 	}
 	
 	if (old_server == primary_server)
@@ -1982,7 +1970,7 @@ void 	window_check_servers (void)
 {
 	Window	*tmp;
 	int	cnt, max, i, connected;
-	int	prime = -1;
+	int	prime = NOSERV;
 
 	connected_to_server = 0;
 	max = server_list_size();
@@ -2008,7 +1996,7 @@ void 	window_check_servers (void)
 				if (!connected)
 				{
 					tmp->last_server = i;
-					tmp->server = -1;
+					tmp->server = NOSERV;
 				}
 				else
 				{
@@ -2022,7 +2010,7 @@ void 	window_check_servers (void)
 			connected_to_server++;
 		else if (connected)
 		{
-			dont_save_server_channels(i);
+			set_server_save_channels(i, 0);
 			close_server(i, "No windows for this server");
 		}
 	}
@@ -2225,9 +2213,6 @@ static void 	clear_window (Window *window)
 		return;
 
 	window->top_of_display = window->display_ip;
-#if 0
-	window->ceiling_of_display = window->top_of_display;
-#endif
 	if (window->miscflags & WINDOW_NOTIFIED)
 		window->miscflags &= ~WINDOW_NOTIFIED;
 	recalculate_window_cursor_and_display_ip(window);
@@ -2282,9 +2267,6 @@ static void	unclear_window (Window *window)
 			break;
 		window->top_of_display = window->top_of_display->prev;
 	}
-#if 0
-	window->ceiling_of_display = window->top_of_display;
-#endif
 
 	recalculate_window_cursor_and_display_ip(window);
 	window_body_needs_redraw(window);
@@ -2465,22 +2447,18 @@ int     get_geom_by_winref (const char *desc, int *co, int *li)
 static Window *get_window (char *name, char **args)
 {
 	char	*arg;
-	Window	*tmp;
+	Window	*win;
 
-	if ((arg = next_arg(*args, args)) != NULL)
+	if ((arg = next_arg(*args, args)))
 	{
-		if (is_number(arg))
-		{
-			if ((tmp = get_window_by_refnum(my_atol(arg))) != NULL)
-				return (tmp);
-		}
-		if ((tmp = get_window_by_name(arg)) != NULL)
-			return (tmp);
+		if ((win = get_window_by_desc(arg)))
+			return win;
 		say("%s: No such window: %s", name, arg);
 	}
 	else
 		say("%s: Please specify a window refnum or name", name);
-	return ((Window *) 0);
+
+	return NULL;
 }
 
 /*
@@ -2777,7 +2755,7 @@ Window *window_channel (Window *window, char **args)
 	const char *carg;
 
 	/* Fix by Jason Brand, Nov 6, 2000 */
-	if (window->server == -1)
+	if (window->server == NOSERV)
 	{
 		say("This window is not connected to a server.");
 		return NULL;
@@ -2793,7 +2771,7 @@ Window *window_channel (Window *window, char **args)
 
 		if (!my_strnicmp(carg, "-i", 2))
 		{
-			if (!(carg = get_server_invite_channel()))
+			if (!(carg = get_server_invite_channel(window->server)))
 			{
 				say("You have not been invited to a channel!");
 				return window;
@@ -2828,6 +2806,7 @@ Window *window_channel (Window *window, char **args)
 			{
 			    say("Channel %s is already bound elsewhere", arg);
 			    new_free(&arg2);
+			    new_free(&arg3);
 			    return window;
 			}
 
@@ -2852,6 +2831,7 @@ Window *window_channel (Window *window, char **args)
 		}
 
 		new_free(&arg2);
+		new_free(&arg3);
 	}
 	/* else
 		set_channel_by_refnum(window->refnum, zero); */
@@ -2927,8 +2907,7 @@ else
 
 	say("\tServer: %d - %s",
 				window->server, 
-				window->server > -1 ? 
-				get_server_name(window->server) : "<None>");
+				get_server_name(window->server));
 	say("\tScreen: %p",	window->screen);
 	say("\tGeometry Info: [%d %d %d %d %d %d %d %d %d]", 
 				window->top, window->bottom, 
@@ -2998,7 +2977,7 @@ static Window *window_discon (Window *window, char **args)
 	new_free(&window->bind_channel);
 	new_free(&window->waiting_channel);
 	window->last_server = window->server;
-	window->server = -1;		/* XXX This shouldn't be set here. */
+	window->server = NOSERV;	/* XXX This shouldn't be set here. */
 	window_check_servers();
 	return window;
 }
@@ -3530,13 +3509,13 @@ static Window *window_next (Window *window, char **args)
 
 static	Window *window_noserv (Window *window, char **args)
 {
-	/* This is just like /window discon except last_server is set to -1 */
+	/* This is just like /window discon but last_server is set to NOSERV */
 	reassign_window_channels(window);
 	new_free(&window->current_channel);
 	new_free(&window->bind_channel);
 	new_free(&window->waiting_channel);
-	window->last_server = -1;
-	window->server = -1;		/* XXX This shouldn't be set here. */
+	window->last_server = NOSERV;
+	window->server = NOSERV;	/* XXX This shouldn't be set here. */
 	window_check_servers();
 	return window;
 }
@@ -3714,12 +3693,12 @@ Window *window_query (Window *window, char **args)
 	{
 		if (!strcmp(nick, "."))
 		{
-			if (!(nick = get_server_sent_nick()))
+			if (!(nick = get_server_sent_nick(window->server)))
 				say("You have not messaged anyone yet");
 		}
 		else if (!strcmp(nick, ","))
 		{
-			if (!(nick = get_server_recv_nick()))
+			if (!(nick = get_server_recv_nick(window->server)))
 				say("You have not recieved a message yet");
 		}
 		else if (!strcmp(nick, "*") && 
@@ -3757,9 +3736,6 @@ Window *window_query (Window *window, char **args)
 		}
 	}
 
-/*
-	update_input(UPDATE_ALL);
-*/
 	return window;
 }
 
@@ -3874,7 +3850,7 @@ Window *window_rejoin (Window *window, char **args)
 	char *	newchan = NULL;
 
 	/* First off, we have to be connected to join */
-	if (from_server == -1 || !is_server_connected(from_server))
+	if (from_server == NOSERV || !is_server_registered(from_server))
 	{
 		say("You are not connected to a server.");
 		return window;
@@ -3895,7 +3871,7 @@ Window *window_rejoin (Window *window, char **args)
 		/* Handle /join -i, which joins last invited channel */
 		if (!my_strnicmp(chan, "-i", 2))
                 {
-                        if (!(chan = get_server_invite_channel()))
+                        if (!(chan = get_server_invite_channel(window->server)))
 			{
                                 say("You have not been invited to a channel!");
 				continue;
@@ -4007,9 +3983,9 @@ Window *window_rejoin (Window *window, char **args)
 	if (newchan)
 	{
 		if (keys)
-			send_to_aserver(from_server, "JOIN %s %s", newchan, keys);
+			send_to_server("JOIN %s %s", newchan, keys);
 		else
-			send_to_aserver(from_server, "JOIN %s", newchan);
+			send_to_server("JOIN %s", newchan);
 		new_free(&newchan);
 	}
 
@@ -4032,10 +4008,7 @@ static Window *window_refnum (Window *window, char **args)
 		}
 	}
 	else
-	{
-		say("No such window!");
 		window = NULL;
-	}
 	return window;
 }
 
@@ -4044,10 +4017,7 @@ static Window *window_refnum_or_swap (Window *window, char **args)
 	Window  *tmp;
 
 	if (!(tmp = get_window("REFNUM_OR_SWAP", args)))
-	{
-		say("No such window!");
 		return NULL;
-	}
 
 	if (tmp->screen)
 	{
@@ -4063,12 +4033,8 @@ static Window *window_refnum_or_swap (Window *window, char **args)
 
 static Window *window_refresh (Window *window, char **args)
 {
-	int oiwc = in_window_command;
-
-	in_window_command = 0;
-	update_all_windows();
 	update_all_status();
-	in_window_command = oiwc;
+	update_all_windows();
 	return window;
 }
 
@@ -4229,16 +4195,10 @@ Window *window_server (Window *window, char **args)
 {
 	char *	arg;
 	int	newconn;
-#ifdef HAVE_SSL
-	int withSSL = FALSE;
-#endif
 
 	if ((arg = next_arg(*args, args)))
 	{
 		int i = find_server_refnum(arg, NULL);
-#ifdef HAVE_SSL
-		withSSL = get_server_enable_ssl(i);
-#endif
 
 		if (windows_connected_to_server(window->server) > 1)
 		{
@@ -4263,7 +4223,7 @@ Window *window_server (Window *window, char **args)
 			 * Associate ourselves with the new server.
 			 */
 			window->server = i;
-			window->last_server = -1;
+			window->last_server = NOSERV;
 
 			/*
 			 * Set the window's lastlog level that is
@@ -4546,9 +4506,7 @@ BUILT_IN_COMMAND(windowcmd)
 	int 	nargs = 0;
 	Window 	*window;
 	int	old_status_update;
-	int 	oiwc = in_window_command;
 
-	in_window_command = 1;
 	old_status_update = permit_status_update(0);
 	message_from(NULL, LOG_CURRENT);
 	window = current_window;
@@ -4589,7 +4547,6 @@ BUILT_IN_COMMAND(windowcmd)
 	if (!nargs)
 		window_describe(current_window, NULL);
 
-	in_window_command = oiwc;
 	permit_status_update(old_status_update);
 	message_from((char *) 0, LOG_CRAP);
 	window_check_channels();
@@ -4717,8 +4674,11 @@ int	flush_scrollback_after (Window *window)
 
 	curr_line = window->top_of_display;
 	for (count = 1; count < window->display_size; count++)
-		if ((curr_line = curr_line->next) == window->display_ip)
+	{
+		if (curr_line == window->display_ip)
 			return 0;
+		curr_line = curr_line->next;
+	}
 
 	next_line = curr_line->next;
 	curr_line->next = window->display_ip;
@@ -4749,8 +4709,12 @@ static void	window_scrollback_start (Window *window)
 		return;
 	}
 
+	if (window->scrollback_point == NULL)
+		window->scrollback_point = window->top_of_display;
+
 	window->autohold = 1;
 	window->top_of_display = window->top_of_scrollback;
+	recalculate_window_cursor_and_display_ip(window);
 	window_body_needs_redraw(window);
 	window_statusbar_needs_update(window);
 }
@@ -4758,6 +4722,15 @@ static void	window_scrollback_start (Window *window)
 static void	window_scrollback_end (Window *window)
 {
 	window->autohold = 0;
+	if (window->scrollback_point)
+	{
+		window->top_of_display = window->scrollback_point;
+		window->scrollback_point = NULL;
+		recalculate_window_cursor_and_display_ip(window);
+		window_body_needs_redraw(window);
+		window_statusbar_needs_update(window);
+	}
+
 	if (window->distance_from_display_ip >= window->display_size)
 		unclear_window(window);
 }
@@ -4772,6 +4745,9 @@ static void 	window_scrollback_backwards_lines (Window *window, int lines)
 		term_beep();
 		return;
 	}
+
+	if (window->scrollback_point == NULL)
+		window->scrollback_point = window->top_of_display;
 
 	for (new_lines = 0; new_lines < lines; new_lines++)
 	{
@@ -4804,6 +4780,16 @@ static void 	window_scrollback_forwards_lines (Window *window, int lines)
 		if (new_top == window->display_ip)
 			break;
 		new_top = new_top->next;
+
+		if (new_top == window->scrollback_point)
+		{
+			window->scrollback_point = NULL;
+			window->top_of_display = new_top;
+			recalculate_window_cursor_and_display_ip(window);
+			if (window->distance_from_display_ip <= window->display_size)
+				break;
+			/* Otherwise, just keep going */
+		}
 	}
 	window->top_of_display = new_top;
 
@@ -4811,10 +4797,13 @@ static void 	window_scrollback_forwards_lines (Window *window, int lines)
 	window_body_needs_redraw(window);
 	window_statusbar_needs_update(window);
 
-	if (window->distance_from_display_ip <= window->display_size)
+	if (window->scrollback_point == NULL && window->distance_from_display_ip <= window->display_size)
 	{
 		window->autohold = 0;
-		unclear_window(window);		/* Historical reasons */
+#if 0
+		if (window->top_of_display == window->display_ip)
+			unclear_window(window);		/* Historical reasons */
+#endif
 	}
 }
 
@@ -4829,8 +4818,9 @@ static void 	window_scrollback_to_string (Window *window, regex_t *preg)
 
 		if (regexec(preg, new_top->line, 0, NULL, 0) == 0)
 		{
+			if (window->scrollback_point == NULL)
+				window->scrollback_point = window->top_of_display;
 			window->top_of_display = new_top;
-
 			window->autohold = 1;
 			recalculate_window_cursor_and_display_ip(window);
 			window_body_needs_redraw(window);
@@ -5038,7 +5028,10 @@ static void 	set_screens_current_window (Screen *screen, Window *window)
 	}
 	if (current_window != window)
 		make_window_current(window);
+
+#if 0		/* Can we get away with not doing this? */
 	update_all_windows();
+#endif
 }
 
 void	make_window_current_by_refnum (int refnum)

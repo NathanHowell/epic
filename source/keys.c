@@ -1,4 +1,4 @@
-/* $EPIC: keys.c,v 1.16 2002/09/23 08:07:49 wd Exp $ */
+/* $EPIC: keys.c,v 1.16.2.1 2003/02/27 15:29:56 wd Exp $ */
 /*
  * keys.c:  Keeps track of what happens whe you press a key.
  *
@@ -34,6 +34,7 @@
 #include "irc.h"
 #include "config.h"
 #include "commands.h"
+#include "functions.h"
 #include "history.h"
 #include "ircaux.h"
 #include "input.h"
@@ -46,6 +47,7 @@
 #include "term.h"
 #include "vars.h"
 #include "window.h"
+#include "timer.h"
 
 /* This file is split into two pieces.  The first piece represents bindings.
  * Bindings are now held in a linked list, allowing the user to add new ones
@@ -247,7 +249,7 @@ void key_exec (struct Key *key) {
  * possible input combinations and executing them as it goes. */
 void key_exec_bt (struct Key *key) {
     unsigned char *kstr = empty_string, *nstr;
-    int len = 1, kslen, i;
+    int len = 1, kslen;
     struct Key *kp;
 
     /* now walk backwards, growing kstr as necessary */
@@ -303,8 +305,7 @@ void key_exec_bt (struct Key *key) {
  * previous key's action (if there has been a timeout).  The timeout factor
  * is set in milliseconds by the KEY_INTERVAL variable.  See further for
  * instructions. :) */
-struct Key *handle_keypress (struct Key *last, struct timeval pressed,
-			     unsigned char key) {
+struct Key *handle_keypress (struct Key *last, Timeval pressed, unsigned char key) {
     struct Key *kp;
     
     /* we call the timeout code here, too, just to be safe. */
@@ -323,6 +324,11 @@ struct Key *handle_keypress (struct Key *last, struct timeval pressed,
 	return NULL;
     }
 
+    /* If there is a map and a keybinding, schedule a timeout */
+    if (kp->map && kp->bound)
+	add_timer(0, empty_string, get_int_var(KEY_INTERVAL_VAR) / 1000.0, 1,
+			do_input_timeouts, NULL, NULL, -1);
+
     /* if the key has a map associated, we can't automatically execute the
      * action.  return kp and wait quietly. */
     if (kp->map != NULL)
@@ -333,9 +339,10 @@ struct Key *handle_keypress (struct Key *last, struct timeval pressed,
     return NULL;
 }
 
-struct Key *timeout_keypress (struct Key *last, struct timeval pressed) {
+struct Key *timeout_keypress (struct Key *last, Timeval pressed) {
     int mpress = 0; /* ms count since last pressing */
-    struct timeval tv;
+    Timeval tv;
+    Timeval now;
 
     if (last == NULL)
 	return NULL; /* fresh state, we need not worry about timeouts */
@@ -343,11 +350,12 @@ struct Key *timeout_keypress (struct Key *last, struct timeval pressed) {
     if (last->bound == NULL)
 	return last; /* wait unconditionally if this key is unbound. */
 
+    get_time(&now);
     tv = time_subtract(pressed, now);
     mpress = tv.tv_sec * 1000;
     mpress += tv.tv_usec / 1000;
 
-    if (mpress > get_int_var(KEY_INTERVAL_VAR)) {
+    if (mpress >= get_int_var(KEY_INTERVAL_VAR)) {
 	/* we timed out.  if the last key had some action associated,
 	 * execute that action. */
 	key_exec(last);
@@ -858,19 +866,15 @@ void unload_bindings_recurse (const char *pkg, struct Key *map) {
     }
 }
 
-/* set_key_interval:  this is used to construct a new timeval when the
+/* set_key_interval:  this is used to construct a new Timeval when the
  * 'KEY_INTERVAL' /set is changed.  We modify an external variable which
  * defines how long the client will wait to timeout, at most. */
 void set_key_interval (int msec) {
-
     if (msec < 10) {
 	say("Setting KEY_INTERVAL below 10ms is not recommended.");
-	set_int_var(KEY_INTERVAL_VAR, 10);
 	msec = 10;
     }
 
-    input_timeout.tv_usec = (msec % 1000) * 1000;
-    input_timeout.tv_sec = msec / 1000;
     set_int_var(KEY_INTERVAL_VAR, msec);
 }
 
@@ -1196,17 +1200,6 @@ BUILT_IN_COMMAND(parsekeycmd) {
 	    new_free(&fake.stuff);
     }
 }
-
-#define EMPTY empty_string
-#define EMPTY_STRING m_strdup(EMPTY)
-#define RETURN_EMPTY return m_strdup(EMPTY)
-#define RETURN_IF_EMPTY(x) if (empty( x )) RETURN_EMPTY
-#define GET_INT_ARG(x, y) {RETURN_IF_EMPTY(y); x = my_atol(safe_new_next_arg(y, &y));}
-#define GET_FLOAT_ARG(x, y) {RETURN_IF_EMPTY(y); x = atof(safe_new_next_arg(y, &y));}
-#define GET_STR_ARG(x, y) {RETURN_IF_EMPTY(y); x = new_next_arg(y, &y);RETURN_IF_EMPTY(x);}
-#define RETURN_MSTR(x) return ((x) ? (x) : EMPTY_STRING);
-#define RETURN_STR(x) return m_strdup((x) ? (x) : EMPTY)
-#define RETURN_INT(x) return m_strdup(ltoa((x)))
 
 /* Used by function_bindctl */
 /*

@@ -1,4 +1,4 @@
-/* $EPIC: help.c,v 1.2 2002/07/17 22:52:52 jnelson Exp $ */
+/* $EPIC: help.c,v 1.2.2.1 2003/02/27 15:29:56 wd Exp $ */
 /*
  * help.c: handles the help stuff for irc 
  *
@@ -48,7 +48,7 @@
  */
 
 #if 0
-static char rcsid[] = "@(#)$Id: help.c,v 1.2 2002/07/17 22:52:52 jnelson Exp $";
+static char rcsid[] = "@(#)$Id: help.c,v 1.2.2.1 2003/02/27 15:29:56 wd Exp $";
 #endif
 
 #include "irc.h"
@@ -62,7 +62,6 @@ static char rcsid[] = "@(#)$Id: help.c,v 1.2 2002/07/17 22:52:52 jnelson Exp $";
 #include "term.h"
 #include "vars.h"
 #include "window.h"
-#include <sys/stat.h>
 #include "glob.h"
 
 /* Forward declarations */
@@ -104,7 +103,7 @@ static	int	use_help_window = 0;
 static	int	show_help (Window *window, char *name)
 {
 	Window	*old_to_window;
-	int	rows = 0;
+	int	rows = -1;
 	char	line[256];
 
 	if (!help_fp)
@@ -298,7 +297,11 @@ static	void	help_show_paused_topic (char *name, char *line)
 	if (toupper(*line) == 'Q')
 		i = help_paused_lines + 1;	/* just big enough */
 
-	rows = help_window->display_size;
+	if (get_int_var(HELP_PAGER_VAR))
+		rows = help_window->display_size;
+	else
+		rows = help_paused_lines;	/* Suitably big enough */
+
 	if (i < help_paused_lines)
 	{
 		for (j = 0; j < rows; j++)
@@ -355,7 +358,7 @@ static	void	help_me (char *topics, char *args)
 		cnt,
 		i,
 		cols;
-	struct	stat	stat_buf;
+	Stat	stat_buf;
 	char	path[BIG_BUFFER_SIZE+1];
 	int	help_paused_first_call = 0;
 	char *	help_paused_path = (char *) 0;

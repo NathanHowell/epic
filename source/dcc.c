@@ -1,4 +1,4 @@
-/* $EPIC: dcc.c,v 1.40 2002/11/08 23:36:12 jnelson Exp $ */
+/* $EPIC: dcc.c,v 1.40.2.1 2003/02/27 15:29:55 wd Exp $ */
 /*
  * dcc.c: Things dealing client to client connections. 
  *
@@ -37,6 +37,7 @@
 #include "crypt.h"
 #include "ctcp.h"
 #include "dcc.h"
+#include "functions.h"
 #include "hook.h"
 #include "ircaux.h"
 #include "lastlog.h"
@@ -49,7 +50,6 @@
 #include "window.h"
 #include "term.h"
 #include "notice.h"
-#include <sys/stat.h>
 
 #define DCC_BLOCK_SIZE	BIG_BUFFER_SIZE
 
@@ -70,40 +70,43 @@
 
 typedef	struct	DCC_struct
 {
-		unsigned	flags;
-		int		family;
-		int		locked;		/* XXX - Sigh */
-		int		socket;
-		int		file;
-		unsigned long	filesize;
-		char *		description;
-		char *		filename;
-		char *		user;
-		char *		othername;
-		char *		encrypt;
-	struct	DCC_struct *	next;
+	unsigned	flags;
+	int		family;
+	int		locked;		/* XXX - Sigh */
+	int		socket;
+	int		file;
+	int		held;
+	long		refnum;
+	u_32int_t	filesize;
+	char *		description;
+	char *		filename;
+	char *		user;
+	char *		othername;
+	char *		encrypt;
+struct	DCC_struct *	next;
 
-		SS		offer;			/* Their offer */
-		SS		peer_sockaddr;		/* Their saddr */
-		SS		local_sockaddr;		/* Our saddr */
-		u_short		want_port;		/* HOST ORDER */
+	SS		offer;			/* Their offer */
+	SS		peer_sockaddr;		/* Their saddr */
+	SS		local_sockaddr;		/* Our saddr */
+	unsigned short	want_port;		/* HOST ORDER */
 
-		off_t		bytes_read;
-		off_t		bytes_sent;
-		int		window_sent;
-		int		window_max;
-		Timeval		lasttime;
-		Timeval		starttime;
-		unsigned long	packets_total;
-		unsigned long	packets_transfer;
-		unsigned long	packets_ack;
-		long		packets_outstanding;
-		off_t		resume_size;
+	u_32int_t	bytes_read;
+	u_32int_t	bytes_sent;
+	int		window_sent;
+	int		window_max;
+	Timeval		lasttime;
+	Timeval		starttime;
+	u_32int_t	packets_total;
+	u_32int_t	packets_transfer;
+	u_32int_t	packets_ack;
+	u_32int_t	packets_outstanding;	/* Not unsigned! */
+	u_32int_t	resume_size;
 
-		int		(*open_callback) (struct DCC_struct *);
+	int		(*open_callback) (struct DCC_struct *);
+	int		server;
 }	DCC_list;
 
-static	off_t		filesize = 0;
+static	long		filesize = 0;
 static	DCC_list *	ClientList = NULL;
 static	char		DCC_current_transfer_buffer[256];
 	time_t		dcc_timeout = 600;		/* Backed by a /set */
@@ -121,8 +124,8 @@ static	void 		dcc_really_erase 	(void);
 static	void		dcc_rename 		(char *);
 static	DCC_list *	dcc_searchlist 		(const char *, const char *, unsigned, int, const char *, int);
 static	void		dcc_send_raw 		(char *);
-static	void 		output_reject_ctcp 	(char *, char *);
-static	void		process_incoming_chat	(DCC_list *);
+static	void 		output_reject_ctcp 	(int, char *, char *);
+static	void		process_dcc_chat	(DCC_list *);
 static	void		process_incoming_listen (DCC_list *);
 static	void		process_incoming_raw 	(DCC_list *);
 static	void		process_outgoing_file 	(DCC_list *);
@@ -135,8 +138,8 @@ static	char *		dcc_urldecode		(const char *);
 
 #ifdef MIRC_BROKEN_DCC_RESUME
 static	void		dcc_getfile_resume 	    (char *);
-static 	void 		dcc_getfile_resume_demanded (char *, char *, char *, char *);
-static	void		dcc_getfile_resume_start    (char *, char *, char *, char *);
+static 	void 		dcc_getfile_resume_demanded (const char *, char *, char *, char *);
+static	void		dcc_getfile_resume_start    (const char *, char *, char *, char *);
 #endif
 
 
@@ -317,10 +320,13 @@ static 	void		dcc_erase (DCC_list *erased)
 		/*
 		 * And output it to the user
 		 */
-		if (!dead && *(erased->user) != '=')
-			isonbase(dummy_ptr, output_reject_ctcp);
-		else
-			output_reject_ctcp(dummy_ptr, erased->user);
+		if (is_server_registered(erased->server))
+		{
+		    if (!dead && *(erased->user) != '=')
+			isonbase(erased->server, dummy_ptr, output_reject_ctcp);
+		    else
+			output_reject_ctcp(erased->server, dummy_ptr, erased->user);
+		}
 	      }
 	      while (0);
 	}
@@ -363,6 +369,36 @@ void 	close_all_dcc (void)
 	}
 }
 
+/*
+ * Place the dcc on hold.  Return 1
+ * (fail) if * it was already on hold.
+ */
+int	dcc_hold (DCC_list *dcc)
+{
+	new_hold_fd(dcc->socket);
+	if (dcc->held)
+		return 1;
+	else {
+		dcc->held = 1;
+		return 0;
+	}
+}
+
+/*
+ * Remove the hold.  Return 1
+ * (fail) if it was already unheld.
+ */
+int	dcc_unhold (DCC_list *dcc)
+{
+	new_unhold_fd(dcc->socket);
+	if (!dcc->held)
+		return 1;
+	else {
+		dcc->held = 0;
+		return 0;
+	}
+}
+
 
 
 
@@ -391,6 +427,7 @@ static	DCC_list *dcc_searchlist (
 	DCC_list 	*client, 
 			*new_client;
 	const char 	*last = NULL;
+	long		maxref = 0;
 
 	if (x_debug & DEBUG_DCC_SEARCH)
 		yell("entering dcc_sl.  desc (%s) user (%s) type (%d) "
@@ -417,6 +454,14 @@ static	DCC_list *dcc_searchlist (
 				client->flags & DCC_ACTIVE);
 		}
 
+		/*
+		 * Find the largest refnum in case we have to add a new dcc.
+		 * Conceivably this will eventually overflow and minor damage
+		 * will ensue if the user perpetually adds new dccs before the
+		 * largest refnum closes.
+		 */
+		if (client->refnum >= maxref)
+			maxref = client->refnum + 1;
 
 		/*
 		 * Ok. first of all, it has to be the right type.
@@ -514,6 +559,7 @@ static	DCC_list *dcc_searchlist (
 	new_client->socket 		= -1;
 	new_client->file 		= -1;
 	new_client->filesize 		= filesize;
+	new_client->held		= 0;
 	new_client->filename 		= NULL;
 	new_client->packets_total 	= filesize ? 
 					  (filesize / DCC_BLOCK_SIZE + 1) : 0;
@@ -534,6 +580,7 @@ static	DCC_list *dcc_searchlist (
 	new_client->encrypt 		= NULL;
 	new_client->resume_size		= 0;
 	new_client->open_callback	= NULL;
+	new_client->refnum		= maxref;
 	get_time(&new_client->lasttime);
 
 	ClientList = new_client;
@@ -610,18 +657,18 @@ int	dcc_opened (int fd, int result)
 		if (!strcmp(type, "SEND"))
 		{
 		    if ((jvs_blah = do_hook(DCC_CONNECT_LIST,
-					"%s %s %s %s %s %ld", 
+					"%s %s %s %s %s %s", 
 					dcc->user, type, p_addr, p_port,
 					dcc->description,
-					dcc->filesize)))
+					ltoa(dcc->filesize))))
 			    /*
 			     * Compatability with bitchx
 			     */
 			jvs_blah = do_hook(DCC_CONNECT_LIST,
-					"%s GET %s %s %s %ld", 
+					"%s GET %s %s %s %s", 
 					dcc->user, p_addr, p_port,
 					dcc->description,
-					dcc->filesize);
+					ltoa(dcc->filesize));
 		}
 		else
 		{
@@ -663,7 +710,7 @@ static	int	dcc_open (DCC_list *dcc)
 	/*
 	 * Initialize our idea of what is going on.
 	 */
-	if (from_server == -1)
+	if (from_server == NOSERV)
 		from_server = get_window_server(0);
 	message_from(NULL, LOG_DCC);
 
@@ -674,16 +721,18 @@ static	int	dcc_open (DCC_list *dcc)
 	     */
 	    if (dcc->flags & DCC_THEIR_OFFER)
 	    {
+		dcc->locked++;
 		if ((dcc->socket = client_connect(NULL, 0, (SA *)&dcc->offer, 
 						  sizeof(dcc->offer))) < 0)
 		{
+			dcc->locked--;
 			dcc->flags |= DCC_DELETE;
 			say("Unable to create connection: (%d) [%d] %s", 
 				dcc->socket, errno, my_strerror(errno));
 			retval = -1;
 			break;
 		}
-
+		dcc->locked--;
 		dcc_opened(dcc->socket, 0);
 		from_server = old_server;
 		break;
@@ -821,10 +870,10 @@ static void	dcc_send_booster_ctcp (DCC_list *dcc)
 		 * Tell the user we sent out the request
 		 */
 		message_from(NULL, LOG_DCC);
-		if (do_hook(DCC_OFFER_LIST, "%s %s %s %ld", 
-			dcc->user, type, url_name, dcc->filesize))
-		    say("Sent DCC %s request (%s %ld) to %s", 
-			type, nopath, dcc->filesize, dcc->user);
+		if (do_hook(DCC_OFFER_LIST, "%s %s %s %s", 
+			dcc->user, type, url_name, ltoa(dcc->filesize)))
+		    say("Sent DCC %s request (%s %s) to %s", 
+			type, nopath, ltoa(dcc->filesize), dcc->user);
 		message_from(NULL, LOG_CURRENT);
 
 		new_free(&url_name);
@@ -1035,7 +1084,7 @@ void	process_dcc(char *args)
 			 * defer to the next call to dcc_check() which will
 			 * happen no later than the top of the next minute.
 			 */
-			dcc_check(NULL);	/* Clean up - XXX Wrong */
+			dcc_check(NULL, NULL);	/* Clean up - XXX Wrong */
 #endif
 			return;
 		}
@@ -1066,6 +1115,7 @@ static void	dcc_chat (char *args)
 	{
 		if (args[1] == 'p')
 		{
+			next_arg(args, &args);
 			if (args && *args)
 			    portnum = my_atol(next_arg(args, &args));
 		}
@@ -1183,7 +1233,7 @@ static	void	dcc_getfile (char *args, int resume)
 	int		get_all = 0;
 	int		count = 0;
 	Stat		sb;
-	int		old_dp, old_dn, old_dc;
+	int		proto;
 
 	if (!(user = next_arg(args, &args)))
 	{
@@ -1234,7 +1284,7 @@ static	void	dcc_getfile (char *args, int resume)
 
 #ifdef MIRC_BROKEN_DCC_RESUME
 		if (resume && get_int_var(MIRC_BROKEN_DCC_RESUME_VAR) && stat(fullname, &sb) != -1) {
-			dcc->bytes_sent = 0L;
+			dcc->bytes_sent = 0;
 			dcc->bytes_read = dcc->resume_size = sb.st_size;
 		
 			if (((SA *)&dcc->offer)->sa_family == AF_INET)
@@ -1245,19 +1295,11 @@ static	void	dcc_getfile (char *args, int resume)
 				yell("SENDING DCC RESUME to [%s] [%s|%s|%ld]", user, filename, dcc->othername, (long)sb.st_size);
 		
 			/* Just in case we have to fool the protocol enforcement. */
-			old_dp = doing_privmsg();
-			old_dn = doing_notice();
-			old_dc = doing_ctcp();
-		
-			set_doing_privmsg(0);
-			set_doing_notice(0);
-			set_doing_ctcp(0);
+			proto = get_server_protocol_state(from_server);
+			set_server_protocol_state(from_server, 0);
 			send_ctcp(CTCP_PRIVMSG, user, CTCP_DCC, "RESUME %s %s %ld", 
 				dcc->description, dcc->othername, (long)sb.st_size);
-		
-			set_doing_privmsg(old_dp);
-			set_doing_notice(old_dn);
-			set_doing_ctcp(old_dc);
+			set_server_protocol_state(from_server, proto);
 
 			/*
 			 * Warning:  It seems to be for the best to _not_ loop
@@ -1311,7 +1353,7 @@ static void dcc_getfile_resume	(char *args) { return dcc_getfile(args, 1); }
 /*
  * Calculates transfer speed based on size, start time, and current time.
  */
-static char *	calc_speed (off_t sofar, struct timeval sta, struct timeval cur)
+static char *	calc_speed (u_32int_t sofar, Timeval sta, Timeval cur)
 {
 	static char	buf[7];
 	double		tdiff = time_diff(sta, cur);
@@ -1327,7 +1369,7 @@ static char *	calc_speed (off_t sofar, struct timeval sta, struct timeval cur)
  * Packs a file size into a smaller representation of Kb, Mb, or Gb.
  * I'm sure it can be done less kludgy.
  */
-static char *	calc_size (off_t fsize)
+static char *	calc_size (u_32int_t fsize)
 {
 	static char	buf[8];
 
@@ -1374,8 +1416,8 @@ static	char		*format =
 							           "Unknown",
 				Client->starttime.tv_sec,
 			  (long)Client->filesize,
-				Client->bytes_sent ? (u_long)Client->bytes_sent
-						   : (u_long)Client->bytes_read,
+				Client->bytes_sent ? (unsigned long)Client->bytes_sent
+						   : (unsigned long)Client->bytes_read,
 				Client->description))
 	    {
 		char *	filename = strrchr(Client->description, '/');
@@ -1384,8 +1426,8 @@ static	char		*format =
 		char	speed[9];
 		char	buf[23];
 		char *	time_f;
-		off_t	tot_size;
-		off_t	act_sent;
+		u_32int_t	tot_size;
+		u_32int_t	act_sent;
 
 		/*
 		 * Figure out something sane for the filename
@@ -1575,7 +1617,7 @@ static	void	dcc_filesend (char *args)
 	char		*user,
 			*this_arg;
 	Filename	fullname;
-	u_short		portnum = 0;
+	unsigned short	portnum = 0;
 	int		filenames_parsed = 0;
 	DCC_list	*Client;
 	Stat		stat_buf;
@@ -1785,13 +1827,13 @@ char	*dcc_raw_connect (const char *host, const char *port, int family)
  *
  * XXX This function is not really family independant (but it's close)
  */
-void	register_dcc_offer (char *user, char *type, char *description, char *address, char *port, char *size, char *extra, char *rest)
+void	register_dcc_offer (const char *user, char *type, char *description, char *address, char *port, char *size, char *extra, char *rest)
 {
 	DCC_list *	Client;
 	int		CType, jvs_blah;
 	char *		c;
 	int		do_auto = 0;	/* used in dcc chat collisions */
-	u_short		realport;	/* Bleh */
+	unsigned short	realport;	/* Bleh */
 	char 		p_addr[256];
 	int		err;
 
@@ -1959,9 +2001,12 @@ void	register_dcc_offer (char *user, char *type, char *description, char *addres
 
   	if (do_auto)
   	{
+		char *copy;
+
                 if (do_hook(DCC_CONNECT_LIST,"%s CHAT", user))
 			say("DCC CHAT already requested by %s, connecting...", user);
-  		dcc_chat(user);
+		copy = LOCAL_COPY(user);
+  		dcc_chat(copy);
 		return;
 	}
 
@@ -1972,9 +2017,9 @@ void	register_dcc_offer (char *user, char *type, char *description, char *addres
 	 */
 	Client->locked++;
 	if ((Client->flags & DCC_TYPES) == DCC_FILEREAD)
-	       jvs_blah = do_hook(DCC_REQUEST_LIST, "%s %s %s %s %s %s %ld",
+	       jvs_blah = do_hook(DCC_REQUEST_LIST, "%s %s %s %s %s %s %s",
 			  user, type, description, p_addr, port,
-			  Client->description, Client->filesize);
+			  Client->description, ltoa(Client->filesize));
 	else
 	       jvs_blah = do_hook(DCC_REQUEST_LIST, "%s %s %s %s %s",
 			  user, type, description, p_addr, port);
@@ -1986,8 +2031,8 @@ void	register_dcc_offer (char *user, char *type, char *description, char *addres
 	    /* WC asked to have them moved here */
 	    if ((Client->flags & DCC_TYPES) == DCC_FILEREAD)
 	    {
-		struct stat statit;
-		char *realpath;
+		Stat 	statit;
+		char *	realpath;
 
 		if (get_string_var(DCC_STORE_PATH_VAR))
 		    realpath = m_sprintf("%s/%s", get_string_var(DCC_STORE_PATH_VAR), Client->description);
@@ -1999,7 +2044,7 @@ void	register_dcc_offer (char *user, char *type, char *description, char *addres
 		{
 		    if (statit.st_size < Client->filesize)
 		    {
-			say("WARNING: File [%s] exists but is smaller then the file offered.", realpath);
+			say("WARNING: File [%s] exists but is smaller than the file offered.", realpath);
 			say("Use /DCC CLOSE GET %s %s        to not get the file.", user, Client->description);
 #ifdef MIRC_BROKEN_DCC_RESUME
 			say("Use /DCC RESUME %s %s           to continue the copy where it left off.", user, Client->description);
@@ -2027,8 +2072,8 @@ void	register_dcc_offer (char *user, char *type, char *description, char *addres
 
 	    /* Thanks, Tychy! (lherron@imageek.york.cuny.edu) */
 	    if ((Client->flags & DCC_TYPES) == DCC_FILEREAD)
-		say("DCC %s (%s %ld) request received from %s!%s [%s:%s]",
-			type, description, Client->filesize, user, 
+		say("DCC %s (%s %s) request received from %s!%s [%s:%s]",
+			type, description, ltoa(Client->filesize), user, 
 			FromUserHost, p_addr, port);
 	    else
 		say("DCC %s (%s) request received from %s!%s [%s:%s]", 
@@ -2045,7 +2090,7 @@ void	register_dcc_offer (char *user, char *type, char *description, char *addres
  * Check all DCCs for data, and if they have any, perform whatever
  * actions are required.
  */
-void	dcc_check (fd_set *Readables)
+void	dcc_check (fd_set *Readables, fd_set *Writables)
 {
 	DCC_list	*Client;
 	int		previous_server;
@@ -2076,13 +2121,13 @@ void	dcc_check (fd_set *Readables)
 		{
 			FD_CLR(Client->socket, Readables);	/* No more! */
 			previous_server = from_server;
-			from_server = -1;
+			from_server = NOSERV;
 			message_from(NULL, LOG_DCC);
 
 			switch (Client->flags & DCC_TYPES)
 			{
 				case DCC_CHAT:
-					process_incoming_chat(Client);
+					process_dcc_chat(Client);
 					break;
 				case DCC_RAW_LISTEN:
 					process_incoming_listen(Client);
@@ -2142,166 +2187,190 @@ void	dcc_check (fd_set *Readables)
 
 
 
-/*
- * This handles DCC CHAT messages sent to you.
- */
-static	void	process_incoming_chat (DCC_list *Client)
+/*********************************** DCC CHAT *******************************/
+static	void	process_dcc_chat_connection (DCC_list *Client)
 {
-	char	tmp[IO_BUFFER_SIZE + 1];
-	char	tmp2[IO_BUFFER_SIZE + 1];
-	char	*bufptr;
-	long	bytesread;
+	SS	remaddr;
+	int	sra;
+	char	p_addr[256];
+	char	p_port[24];
+	SA *	addr;
 	int	fd;
 
-	if (Client->flags & DCC_MY_OFFER)
+	sra = sizeof(remaddr);
+	fd = Accept(Client->socket, (SA *)&Client->peer_sockaddr, &sra);
+	Client->socket = new_close(Client->socket);
+	if ((Client->socket = fd) > 0)
+		new_open(Client->socket);
+	else
 	{
-		SS	remaddr;
-		int	sra;
-		char	p_addr[256];
-		char	p_port[24];
-		SA *	addr;
-
-		sra = sizeof(remaddr);
-		fd = Accept(Client->socket, (SA *)&Client->peer_sockaddr, &sra);
-		Client->socket = new_close(Client->socket);
-		if ((Client->socket = fd) > 0)
-			new_open(Client->socket);
-		else
-		{
-			Client->flags |= DCC_DELETE;
-			yell("### DCC Error: accept() failed.  Punting.");
-			return;
-		}
-
-		Client->flags &= ~DCC_MY_OFFER;
-		Client->flags |= DCC_ACTIVE;
-
-		addr = (SA *)&Client->peer_sockaddr;
-		inet_ntostr(addr, p_addr, 256, p_port, 24, NI_NUMERICHOST);
-
-		Client->locked++;
-                if (do_hook(DCC_CONNECT_LIST, "%s CHAT %s %s", 
-					Client->user, p_addr, p_port))
-		    say("DCC chat connection to %s[%s:%s] established", 
-					Client->user, p_addr, p_port);
-		Client->locked--;
-
-		get_time(&Client->starttime);
-		return;
-	}
-
-        bufptr = tmp;
-	bytesread = dgets(bufptr, Client->socket, 1);
-
-	switch ((int)bytesread)
-	{
-	case -1:
-	{
-		char *	real_tmp = ((dgets_errno == -1) ? 
-				"Remote End Closed Connection" : 
-				strerror(dgets_errno));
-
 		Client->flags |= DCC_DELETE;
-		Client->locked++;
-                if (do_hook(DCC_LOST_LIST, "%s CHAT %s", 
-				Client->user, real_tmp))
-        		say("DCC CHAT connection to %s lost [%s]", 
-				Client->user, real_tmp);
-		Client->locked--;
+		yell("### DCC Error: accept() failed.  Punting.");
 		return;
 	}
-	case 0:		/* We do buffering, so just ignore incompletes */
-		break;
-	default:
+
+	Client->flags &= ~DCC_MY_OFFER;
+	Client->flags |= DCC_ACTIVE;
+
+	addr = (SA *)&Client->peer_sockaddr;
+	inet_ntostr(addr, p_addr, 256, p_port, 24, NI_NUMERICHOST);
+
+	Client->locked++;
+	if (do_hook(DCC_CONNECT_LIST, "%s CHAT %s %s", 
+				Client->user, p_addr, p_port))
+	    say("DCC chat connection to %s[%s:%s] established", 
+				Client->user, p_addr, p_port);
+	Client->locked--;
+
+	get_time(&Client->starttime);
+}
+
+static	void	process_dcc_chat_error (DCC_list *Client)
+{
+	char	*err_str;
+
+	err_str = ((dgets_errno == -1) ? 
+			"Remote End Closed Connection" : 
+			strerror(dgets_errno));
+
+	Client->flags |= DCC_DELETE;
+	Client->locked++;
+	if (do_hook(DCC_LOST_LIST, "%s CHAT %s", 
+			Client->user, err_str))
+		say("DCC CHAT connection to %s lost [%s]", 
+			Client->user, err_str);
+	Client->locked--;
+	return;
+}
+
+static	char *	process_dcc_chat_ctcps (DCC_list *Client, char *tmp)
+{
+	char 	equal_nickname[80];
+	char	p_addr[256];
+	SA *	addr;
+	char 	uh[80];
+	int	ctcp_request = 0, ctcp_reply = 0;
+
+#define CTCP_MESSAGE "CTCP_MESSAGE "
+#define CTCP_REPLY "CTCP_REPLY "
+
+	if (*tmp == CTCP_DELIM_CHAR)
 	{
-		char 	uh[80];
-		char 	equal_nickname[80];
-		char	p_addr[256];
-		SA *	addr;
+#if 0
+		ov_strcpy(tmp, tmp + 1);
+#endif
+		ctcp_request = 1;
+	}
+	else if (!strncmp(tmp, CTCP_MESSAGE, strlen(CTCP_MESSAGE)))
+	{
+		ov_strcpy(tmp, tmp + strlen(CTCP_MESSAGE));
+		ctcp_request = 1;
+	}
+	else if (!strncmp(tmp, CTCP_REPLY, strlen(CTCP_REPLY)))
+	{
+		ov_strcpy(tmp, tmp + strlen(CTCP_REPLY));
+		ctcp_reply = 1;
+	}
 
-		chomp(tmp);
-		my_decrypt(tmp, strlen(tmp), Client->encrypt);
-		Client->bytes_read += bytesread;
-		message_from(Client->user, LOG_DCC);
-
-		if (x_debug & DEBUG_INBOUND) 
-			yell("%s", tmp);
-
+	if (ctcp_request == 1 || ctcp_reply == 1)
+	{
 		addr = (SA *)&Client->peer_sockaddr;
 		inet_ntostr(addr, p_addr, 256, NULL, 0, NI_NUMERICHOST);
 
-#define CTCP_MESSAGE "CTCP_MESSAGE "
-#define CTCP_MESSAGE_LEN strlen(CTCP_MESSAGE)
-#define CTCP_REPLY "CTCP_REPLY "
-#define CTCP_REPLY_LEN strlen(CTCP_REPLY)
+		snprintf(uh, 80, "Unknown@%s", p_addr);
+		FromUserHost = uh;
+		snprintf(equal_nickname, 80, "=%s", Client->user);
 
-		if (*tmp == CTCP_DELIM_CHAR)
-		{
-			snprintf(uh, 80, "Unknown@%s", p_addr);
-			FromUserHost = uh;
-			snprintf(equal_nickname, 80, "=%s", Client->user);
-
-			/*
-			 * 'tmp' and 'tmp2' are the same size, so this
-			 * strcpy is safe.
-			 *
-			 * XXX - That doesnt make what im doing here any
-			 * less of a hack, though. 
-			 */
-			strcpy(tmp2, tmp);
-
-			/* do_ctcp returns 'tmp2' here, so this is safe. */
-			strcpy(tmp, do_ctcp(equal_nickname, nickname, tmp2));
-			FromUserHost = empty_string;
-		}
-		if (!strncmp(tmp, CTCP_MESSAGE, CTCP_MESSAGE_LEN))
-		{
-			snprintf(uh, 80, "Unknown@%s", p_addr);
-			FromUserHost = uh;
-			snprintf(equal_nickname, 80, "=%s", Client->user);
-
-			/* See above for why these are safe. */
-			strcpy(tmp2, tmp);
-			strcpy(tmp, do_ctcp(equal_nickname, nickname, 
-						tmp2 + CTCP_MESSAGE_LEN));
-			FromUserHost = empty_string;
-		}
-		else if (!strncmp(tmp, CTCP_REPLY, CTCP_REPLY_LEN) || *tmp == CTCP_DELIM_CHAR)
-		{
-			snprintf(uh, 80, "Unknown@%s", p_addr);
-			FromUserHost = uh;
-			snprintf(equal_nickname, 80, "=%s", Client->user);
-
-			/* See above for why these are safe. */
-			strcpy(tmp2, tmp);
-			strcpy(tmp, do_notice_ctcp(equal_nickname, nickname,
-				tmp2 + ((*tmp2 == CTCP_DELIM_CHAR) ? 0 : CTCP_REPLY_LEN)));
-			FromUserHost = empty_string;
-		}
-
-		if (!*tmp)
-			break;
-
-		Client->locked++;
-		if (do_hook(DCC_CHAT_LIST, "%s %s", Client->user, tmp))
-		{
-			if (get_server_away(-2))
-			{
-				strlcat(tmp, "<", IO_BUFFER_SIZE);
-				strlcat(tmp, my_ctime(time(NULL)), 
-						IO_BUFFER_SIZE);
-				strlcat(tmp, ">", IO_BUFFER_SIZE);
-			}
-			put_it("=%s= %s", Client->user, tmp);
-		}
-		Client->locked--;
+		message_from(Client->user, LOG_CTCP);
+		if (ctcp_request == 1)
+			tmp = do_ctcp(equal_nickname, nickname, tmp);
+		else
+			tmp = do_notice_ctcp(equal_nickname, nickname, tmp);
 		message_from(NULL, LOG_CURRENT);
+
+		FromUserHost = empty_string;
+	}
+
+	if (!tmp || !*tmp)
+		return NULL;
+
+	return tmp;
+}
+
+static	void	process_dcc_chat_data (DCC_list *Client)
+{
+	char	*tmp;
+	long	bytesread;
+
+	/* Get a new line via dgets. */
+        tmp = alloca(IO_BUFFER_SIZE + 1);
+	bytesread = dgets(tmp, Client->socket, 1, NULL);
+
+	/* 
+	 * bytesread == 0 means there was new data, but it was an incomplete
+	 * line.  Since we allow dgets() to buffer for us, we just ignore
+	 * this and wait for the rest of the line later.
+	 */
+	if (bytesread == 0)
+		return;
+
+	/*
+	 * bytesread == -1 means the connection just totaly died.
+	 */
+	if (bytesread == -1)
+	{
+		process_dcc_chat_error(Client);
 		return;
 	}
+
+	/*
+	 * Otherwise, handle a new DCC CHAT message.
+	 */
+	Client->bytes_read += bytesread;
+
+	/* First decrypt the message... */
+	chomp(tmp);
+	my_decrypt(tmp, strlen(tmp), Client->encrypt);
+
+	/* Tell the user... */
+	if (x_debug & DEBUG_INBOUND) 
+		yell("DCC: [%d] <- [%s]", Client->socket, tmp);
+
+	/* Handle any CTCPs... */
+	tmp = process_dcc_chat_ctcps(Client, tmp);
+
+	/* If the message is empty, ignore it... */
+	if (!tmp || !*tmp)
+		return;
+
+	/* Otherwise throw the message to the user. */
+	message_from(Client->user, LOG_DCC);
+	Client->locked++;
+	if (do_hook(DCC_CHAT_LIST, "%s %s", Client->user, tmp))
+	{
+		if (get_server_away(NOSERV))
+		{
+			strlcat(tmp, "<", IO_BUFFER_SIZE);
+			strlcat(tmp, my_ctime(time(NULL)), 
+					IO_BUFFER_SIZE);
+			strlcat(tmp, ">", IO_BUFFER_SIZE);
+		}
+		put_it("=%s= %s", Client->user, tmp);
 	}
+	Client->locked--;
+	message_from(NULL, LOG_CURRENT);
+}
+
+static	void	process_dcc_chat (DCC_list *Client)
+{
+	if (Client->flags & DCC_MY_OFFER)
+		process_dcc_chat_connection(Client);
+	else
+		process_dcc_chat_data(Client);
 }
 
 
+/*********************************** DCC CHAT *******************************/
 /*
  * This handles when someone establishes a connection on a $listen()ing
  * socket.  This hooks via /on DCC_RAW.
@@ -2316,6 +2385,8 @@ static	void		process_incoming_listen (DCC_list *Client)
 	char		host[1025];
 	int		len;
 	char		p_port[24];
+	char		l_port[24];
+	char		trash[1025] = "";
 
 	sra = sizeof(remaddr);
 	new_socket = Accept(Client->socket, (SA *) &remaddr, &sra);
@@ -2337,17 +2408,18 @@ static	void		process_incoming_listen (DCC_list *Client)
 
 	len = sizeof(NewClient->local_sockaddr);
 	getsockname(NewClient->socket, (SA *)&NewClient->local_sockaddr, &len);
+	inet_ntostr((SA *)&Client->local_sockaddr, trash, sizeof(trash), l_port, sizeof(l_port), 0);
 
 	NewClient->flags |= DCC_ACTIVE;
-	NewClient->bytes_read = NewClient->bytes_sent = 0L;
+	NewClient->bytes_read = NewClient->bytes_sent = 0;
 	get_time(&NewClient->starttime);
 	new_open(NewClient->socket);
 
 	Client->locked++;
 	if (do_hook(DCC_RAW_LIST, "%s %s N %s", 
-			NewClient->user, NewClient->description, p_port))
+			NewClient->user, NewClient->description, l_port))
             if (do_hook(DCC_CONNECT_LIST,"%s RAW %s %s", 
-			NewClient->user, NewClient->description, p_port))
+			NewClient->user, NewClient->description, l_port))
 		say("DCC RAW connection to %s on %s via %s established",
 			NewClient->description, NewClient->user, p_port);
 	Client->locked--;
@@ -2366,7 +2438,7 @@ static	void		process_incoming_raw (DCC_list *Client)
 	long	bytesread;
 
         bufptr = tmp;
-	switch ((int)(bytesread = dgets(bufptr, Client->socket, 0)))
+	switch ((int)(bytesread = dgets(bufptr, Client->socket, 0, NULL)))
 	{
 	    case -1:
 	    {
@@ -2463,9 +2535,9 @@ static void		process_outgoing_file (DCC_list *Client)
 		 * Tell the user
 		 */
 		Client->locked++;
-                if (do_hook(DCC_CONNECT_LIST, "%s SEND %s %s %s %ld",
+                if (do_hook(DCC_CONNECT_LIST, "%s SEND %s %s %s %s",
 				Client->user, p_addr, p_port,
-				Client->description, Client->filesize))
+				Client->description, ltoa(Client->filesize)))
 		    say("DCC SEND connection to %s[%s:%s] established", 
 				Client->user, p_addr, p_port);
 		Client->locked--;
@@ -2496,13 +2568,13 @@ static void		process_outgoing_file (DCC_list *Client)
 	/*
 	 * The remote user has acknowledged a packet
 	 */
-	else 
-	{ 
+	else
+	{
 		if (x_debug & DEBUG_DCC_XMIT)
-			yell("Reading a packet from [%s:%s(%ld)]", 
+			yell("Reading a packet from [%s:%s(%s)]", 
 				Client->user, 
 				Client->othername, 
-				Client->packets_ack);
+				ltoa(Client->packets_ack));
 
 		/*
 		 * It is important to note here that the ACK must always
@@ -2528,7 +2600,8 @@ static void		process_outgoing_file (DCC_list *Client)
 		if (bytesrecvd >= (Client->packets_ack + 1) * DCC_BLOCK_SIZE)
 		{
 			if (x_debug & DEBUG_DCC_XMIT)
-				yell("Packet #%ld ACKed", Client->packets_ack);
+				yell("Packet #%s ACKed", 
+					ltoa(Client->packets_ack));
 			Client->packets_ack++;
 			Client->packets_outstanding--;
 		}
@@ -2542,12 +2615,15 @@ yell("### Ask the person who you sent the file to look for garbage at the");
 yell("### end of the file you just sent them.  Please enclose that ");
 yell("### information as well as the following:");
 yell("###");
-yell("###    bytesrecvd [%ld]        Client->bytes_sent [%ld]", 
-				ntohl(bytesrecvd), (long)Client->bytes_sent);
-yell("###    Client->filesize [%ld]  Client->packets_ack [%ld]",
-				Client->filesize, Client->packets_ack);
-yell("###    Client->packets_outstanding [%ld]",
-				Client->packets_outstanding);
+yell("###    bytesrecvd [%ld]        Client->bytes_sent [%s]", 
+				ntohl(bytesrecvd), 
+				ltoa(Client->bytes_sent));
+yell("###    Client->filesize [%s]", 
+				ltoa(Client->filesize));
+yell("###    Client->packets_ack [%s]", 
+				ltoa(Client->packets_ack));
+yell("###    Client->packets_outstanding [%s]", 
+				ltoa(Client->packets_outstanding));
 
 			/* And just cope with it to avoid whining */
 			Client->bytes_sent = bytesrecvd;
@@ -2607,10 +2683,10 @@ yell("###    Client->packets_outstanding [%ld]",
 		 * Bug the user
 		 */
 		if (x_debug & DEBUG_DCC_XMIT)
-		    yell("Sending packet [%s [%s] (packet %ld) (%d bytes)]",
+		    yell("Sending packet [%s [%s] (packet %s) (%d bytes)]",
 			Client->user, 
 			Client->othername, 
-			Client->packets_transfer, 
+			ltoa(Client->packets_transfer),
 			bytesread);
 
 		/*
@@ -2722,12 +2798,13 @@ static	void		process_incoming_file (DCC_list *Client)
  *
  * -- Changed this to be quasi-reentrant. yuck.
  */
-static	void 	output_reject_ctcp (char *original, char *received)
+static	void 	output_reject_ctcp (int refnum, char *original, char *received)
 {
 	char	*nickname_requested;
 	char	*nickname_recieved;
 	char	*type;
 	char	*description;
+	int	old_fs;
 
 	/*
 	 * XXX This is, of course, a monsterous hack.
@@ -2738,8 +2815,13 @@ static	void 	output_reject_ctcp (char *original, char *received)
 	nickname_recieved 	= next_arg(received, &received);
 
 	if (nickname_recieved && *nickname_recieved)
+	{
+		old_fs = from_server;
+		from_server = refnum;
 		send_ctcp(CTCP_NOTICE, nickname_recieved, CTCP_DCC,
 				"REJECT %s %s", type, description);
+		from_server = old_fs;
+	}
 }
 
 
@@ -2747,7 +2829,7 @@ static	void 	output_reject_ctcp (char *original, char *received)
 /*
  * This is called when someone sends you a CTCP DCC REJECT.
  */
-void 	dcc_reject (char *from, char *type, char *args)
+void 	dcc_reject (const char *from, char *type, char *args)
 {
 	DCC_list *	Client;
 	char *		description;
@@ -2777,7 +2859,7 @@ void 	dcc_reject (char *from, char *type, char *args)
 }
 
 
-static void DCC_close_filesend (DCC_list *Client, char *info)
+static void	DCC_close_filesend (DCC_list *Client, char *info)
 {
 	char	lame_ultrix[10];	/* should be plenty */
 	char	lame_ultrix2[10];
@@ -2786,9 +2868,9 @@ static void DCC_close_filesend (DCC_list *Client, char *info)
 
 	xtime = time_diff(Client->starttime, get_time(NULL));
 	if (Client->bytes_sent)
-		xfer = (double)(Client->bytes_sent - Client->resume_size);
+		xfer = Client->bytes_sent - Client->resume_size;
 	else
-		xfer = (double)(Client->bytes_read - Client->resume_size);
+		xfer = Client->bytes_read - Client->resume_size;
 	sprintf(lame_ultrix, "%2.4g", (xfer / 1024.0 / xtime));
 
 	/* Cant pass %g to put_it (lame ultrix/dgux), fix suggested by sheik. */
@@ -2888,110 +2970,13 @@ static	char *	dcc_urldecode (const char *s)
 #ifdef MIRC_BROKEN_DCC_RESUME
 
 /*
- * Usage: /DCC RESUME <nick> [file] [-e passkey]
- *
- * XXX - This function is not really protocol independant.
- */
-#if 0
-static	void	dcc_getfile_resume (char *args)
-{
-	char		*user;
-	char		*filename = NULL;
-	DCC_list	*Client;
-	char		*passwd = NULL;
-	struct stat	sb;
-	int		old_dp, old_dn, old_dc;
-
-	if (!get_int_var(MIRC_BROKEN_DCC_RESUME_VAR))
-		return;
-
-	if (!(user = next_arg(args, &args)))
-	{
-		say("You must supply a nickname for DCC RESUME");
-		return;
-	}
-
-	if (args && *args)
-	{
-		/* Leeme lone, Yoshi. :P */
-		if (args[0] != '-' || args[1] != 'e')
-			filename = next_arg(args, &args);
-
-		if (args && args[0] == '-' && args[1] == 'e')
-		{
-			next_arg(args, &args);
-			passwd = next_arg(args, &args);
-		}
-	}
-
-	/*
-	 * This has to be done by hand, we cant use send_ctcp,
-	 * because this violates the protocol, and send_ctcp checks
-	 * for that.  Ugh.
-	 */
-	if (stat(filename, &sb) == -1)
-	{
-		/* File doesnt exist.  Sheesh. */
-		say("DCC RESUME: Cannot use DCC RESUME if the file doesnt exist. [%s|%s]", filename, strerror(errno));
-		return;
-	}
-
-
-	if (!(Client = dcc_searchlist(filename, user, DCC_FILEREAD, 0, NULL, 0)))
-	{
-		if (filename)
-			say("No file (%s) offered in SEND mode by %s", filename, user);
-		else
-			say("No file offered in SEND mode by %s", user);
-		return;
-	}
-
-	if ((Client->flags & DCC_ACTIVE) || (Client->flags & DCC_MY_OFFER))
-	{
-		say("A previous DCC GET:%s to %s exists", filename?filename:"<any>", user);
-		return;
-	}
-
-	if (passwd)
-		Client->encrypt = m_strdup(passwd);
-	Client->bytes_sent = 0L;
-	Client->bytes_read = Client->resume_size = sb.st_size;
-
-	if (((SA *)&Client->offer)->sa_family == AF_INET)
-		malloc_strcpy(&Client->othername, 
-				ltoa(ntohs(V4PORT(Client->offer))));
-
-	if (x_debug & DEBUG_DCC_XMIT)
-		yell("SENDING DCC RESUME to [%s] [%s|%s|%ld]", user, filename, Client->othername, (long)sb.st_size);
-
-	/* Just in case we have to fool the protocol enforcement. */
-	old_dp = doing_privmsg();
-	old_dn = doing_notice();
-	old_dc = in_ctcp_flag();
-
-	set_doing_privmsg(0);
-	set_doing_notice(0);
-	set_doing_ctcp(0);
-
-	send_ctcp(CTCP_PRIVMSG, user, CTCP_DCC, "RESUME %s %s %ld", 
-		filename, Client->othername, (long)sb.st_size);
-
-	set_doing_privmsg(old_dp);
-	set_doing_notice(old_dn);
-	set_doing_ctcp(old_dc);
-
-	/* Then we just sit back and wait for the reply. */
-}
-#endif
-
-/*
  * When the peer demands DCC RESUME
  * We send out a DCC ACCEPT
  */
-static void dcc_getfile_resume_demanded (char *user, char *filename, char *port, char *offset)
+static void dcc_getfile_resume_demanded (const char *user, char *filename, char *port, char *offset)
 {
 	DCC_list	*Client;
-	int		old_dp, old_dn, old_dc;
+	int		proto;
 
 	if (!get_int_var(MIRC_BROKEN_DCC_RESUME_VAR))
 		return;
@@ -3013,24 +2998,16 @@ static void dcc_getfile_resume_demanded (char *user, char *filename, char *port,
 		return;		/* Its a fake */
 
 	Client->bytes_sent = Client->resume_size = my_atol(offset);
-	Client->bytes_read = 0L;
+	Client->bytes_read = 0;
 
 	/* Just in case we have to fool the protocol enforcement. */
-	old_dp = doing_privmsg();
-	old_dn = doing_notice();
-	old_dc = doing_ctcp();
-
-	set_doing_privmsg(0);
-	set_doing_notice(0);
-	set_doing_ctcp(0);
+	proto = get_server_protocol_state(from_server);
+	set_server_protocol_state(from_server, 0);
 
 	send_ctcp(CTCP_PRIVMSG, user, CTCP_DCC, "ACCEPT %s %s %s",
 		filename, port, offset);
 
-	set_doing_privmsg(old_dp);
-	set_doing_notice(old_dn);
-	set_doing_ctcp(old_dc);
-
+	set_server_protocol_state(from_server, proto);
 	/* Wait for them to open the connection */
 }
 
@@ -3039,7 +3016,7 @@ static void dcc_getfile_resume_demanded (char *user, char *filename, char *port,
  * When we get the DCC ACCEPT
  * We start the connection
  */
-static	void	dcc_getfile_resume_start (char *nick, char *filename, char *port, char *offset)
+static	void	dcc_getfile_resume_start (const char *nick, char *filename, char *port, char *offset)
 {
 	DCC_list	*Client;
 	Filename	fullname, pathname;
@@ -3090,3 +3067,138 @@ static	void	dcc_getfile_resume_start (char *nick, char *filename, char *port, ch
 }
 
 #endif
+
+char 	*dccctl 	(char *input)
+{
+	long	ref;
+	char	*listc;
+	int	len;
+	DCC_list	*client;
+	char	*retval = NULL;
+	size_t	clue = 0;
+
+	GET_STR_ARG(listc, input);
+	len = strlen(listc);
+	if (!my_strnicmp(listc, "REFNUMS", len)) {
+		for (client = ClientList; client; client = client->next)
+			m_sc3cat_s(&retval, space, ltoa(client->refnum), &clue);
+	} else if (!my_strnicmp(listc, "GET", len)) {
+		GET_INT_ARG(ref, input);
+
+		for (client = ClientList; client; client = client->next)
+			if (client->refnum == ref)
+				break;
+		if (!client)
+			RETURN_EMPTY;
+
+		GET_STR_ARG(listc, input);
+		len = strlen(listc);
+		if (!my_strnicmp(listc, "REFNUM", len)) {
+			RETURN_INT(client->refnum);
+		} else if (!my_strnicmp(listc, "TYPE", len)) {
+			RETURN_STR(dcc_types[client->flags & DCC_TYPES]);
+		} else if (!my_strnicmp(listc, "DESCRIPTION", len)) {
+			RETURN_STR(client->description);
+		} else if (!my_strnicmp(listc, "FILENAME", len)) {
+			RETURN_STR(client->filename);
+		} else if (!my_strnicmp(listc, "USER", len)) {
+			RETURN_STR(client->user);
+		} else if (!my_strnicmp(listc, "OTHERNAME", len)) {
+			RETURN_STR(client->othername);
+		} else if (!my_strnicmp(listc, "ENCRYPT", len)) {
+			RETURN_STR(client->encrypt);
+		} else if (!my_strnicmp(listc, "FILESIZE", len)) {
+			RETURN_INT(client->filesize);
+		} else if (!my_strnicmp(listc, "RESUMESIZE", len)) {
+			RETURN_INT(client->resume_size);
+		} else if (!my_strnicmp(listc, "READBYTES", len)) {
+			RETURN_INT(client->bytes_read);
+		} else if (!my_strnicmp(listc, "SENTBYTES", len)) {
+			RETURN_INT(client->bytes_sent);
+		} else if (!my_strnicmp(listc, "SERVER", len)) {
+			RETURN_INT(client->server);
+		} else if (!my_strnicmp(listc, "LOCKED", len)) {
+			RETURN_INT(client->locked);
+		} else if (!my_strnicmp(listc, "HELD", len)) {
+			RETURN_INT(client->held);
+		} else if (!my_strnicmp(listc, "LASTTIME", len)) {
+			m_sc3cat_s(&retval, space, ltoa(client->lasttime.tv_sec), &clue);
+			m_sc3cat_s(&retval, space, ltoa(client->lasttime.tv_usec), &clue);
+		} else if (!my_strnicmp(listc, "STARTTIME", len)) {
+			m_sc3cat_s(&retval, space, ltoa(client->starttime.tv_sec), &clue);
+			m_sc3cat_s(&retval, space, ltoa(client->starttime.tv_usec), &clue);
+		} else if (!my_strnicmp(listc, "REMADDR", len)) {
+			char	host[1025], port[25];
+			if (inet_ntostr((SA *)&client->peer_sockaddr,
+						host, sizeof(host),
+						port, sizeof(port), 0))
+				RETURN_EMPTY;
+			m_sc3cat_s(&retval, space, host, &clue);
+			m_sc3cat_s(&retval, space, port, &clue);
+		} else if (!my_strnicmp(listc, "LOCADDR", len)) {
+			char	host[1025], port[25];
+			if (inet_ntostr((SA *)&client->local_sockaddr,
+						host, sizeof(host),
+						port, sizeof(port), 0))
+				RETURN_EMPTY;
+			m_sc3cat_s(&retval, space, host, &clue);
+			m_sc3cat_s(&retval, space, port, &clue);
+		}
+	} else if (!my_strnicmp(listc, "SET", len)) {
+		GET_INT_ARG(ref, input);
+
+		for (client = ClientList; client; client = client->next)
+			if (client->refnum == ref)
+				break;
+		if (!client)
+			RETURN_EMPTY;
+
+		GET_STR_ARG(listc, input);
+		len = strlen(listc);
+		if (!my_strnicmp(listc, "REFNUM", len)) {
+			long	newref;
+
+			GET_INT_ARG(newref, input);
+			client->refnum = newref;
+
+			RETURN_INT(1);
+		} else if (!my_strnicmp(listc, "HELD", len)) {
+			long	hold, held;
+
+			GET_INT_ARG(hold, input);
+			if (hold)
+				held = dcc_hold(client);
+			else
+				held = dcc_unhold(client);
+
+			RETURN_INT(held);
+		}
+	} else if (!my_strnicmp(listc, "TYPEMATCH", len)) {
+		for (client = ClientList; client; client = client->next)
+			if (wild_match(input, dcc_types[client->flags & DCC_TYPES]))
+				m_sc3cat_s(&retval, space, ltoa(client->refnum), &clue);
+	} else if (!my_strnicmp(listc, "DESCMATCH", len)) {
+		for (client = ClientList; client; client = client->next)
+			if (wild_match(input, client->description ? client->description : EMPTY))
+				m_sc3cat_s(&retval, space, ltoa(client->refnum), &clue);
+	} else if (!my_strnicmp(listc, "FILEMATCH", len)) {
+		for (client = ClientList; client; client = client->next)
+			if (wild_match(input, client->filename ? client->filename : EMPTY))
+				m_sc3cat_s(&retval, space, ltoa(client->refnum), &clue);
+	} else if (!my_strnicmp(listc, "USERMATCH", len)) {
+		for (client = ClientList; client; client = client->next)
+			if (wild_match(input, client->user ? client->user : EMPTY))
+				m_sc3cat_s(&retval, space, ltoa(client->refnum), &clue);
+	} else if (!my_strnicmp(listc, "OTHERMATCH", len)) {
+		for (client = ClientList; client; client = client->next)
+			if (wild_match(input, client->othername ? client->othername : EMPTY))
+				m_sc3cat_s(&retval, space, ltoa(client->refnum), &clue);
+	} else if (!my_strnicmp(listc, "LOCKED", len)) {
+		for (client = ClientList; client; client = client->next)
+			if (client->locked)
+				m_sc3cat_s(&retval, space, ltoa(client->refnum), &clue);
+	} else
+		RETURN_EMPTY;
+
+	RETURN_MSTR(retval);
+}

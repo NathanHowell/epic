@@ -9,9 +9,9 @@
 #ifndef __numbers_h__
 #define __numbers_h__
 
-	char	*numeric_banner 	(void);
-	void	display_msg 		(char *, char **);
-	void	numbered_command 	(char *, int, char **);
+const	char *	banner 			(void);
+	void	display_msg 		(const char *, const char **);
+	void	numbered_command 	(const char *, const char *, const char **);
 	void	nickname_sendline 	(char *, char *);
 
 #endif /* _NUMBERS_H_ */

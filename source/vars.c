@@ -1,4 +1,4 @@
-/* $EPIC: vars.c,v 1.19 2002/10/24 22:28:07 jnelson Exp $ */
+/* $EPIC: vars.c,v 1.19.2.1 2003/02/27 15:29:57 wd Exp $ */
 /*
  * vars.c: All the dealing of the irc variables are handled here. 
  *
@@ -96,6 +96,7 @@ static	void	set_mangle_inbound 	(char *value);
 static	void	set_mangle_outbound 	(char *value);
 static	void	set_mangle_logfiles 	(char *value);
 static	void	set_scroll 		(int value);
+static	void	set_notify_interval 	(int value);
 
 /*
  * irc_variable: all the irc variables used.  Note that the integer and
@@ -152,8 +153,12 @@ static	IrcVariable irc_variable[] =
 	{ "DO_NOTIFY_IMMEDIATELY",	BOOL_TYPE_VAR,	DEFAULT_DO_NOTIFY_IMMEDIATELY, NULL, NULL, 0, 0 },
 	{ "EIGHT_BIT_CHARACTERS",	BOOL_TYPE_VAR,	DEFAULT_EIGHT_BIT_CHARACTERS, NULL, eight_bit_characters, 0, 0 },
 	{ "FLOATING_POINT_MATH",	BOOL_TYPE_VAR,	DEFAULT_FLOATING_POINT_MATH, NULL, NULL, 0, 0 },
+	{ "FLOATING_POINT_PRECISION",	INT_TYPE_VAR,	DEFAULT_FLOATING_POINT_PRECISION, NULL, NULL, 0, 0 },
 	{ "FLOOD_AFTER",		INT_TYPE_VAR,	DEFAULT_FLOOD_AFTER, NULL, NULL, 0, 0 },
+	{ "FLOOD_IGNORE",		BOOL_TYPE_VAR,	DEFAULT_FLOOD_IGNORE, NULL, NULL, 0, 0 },
+	{ "FLOOD_MASKUSER",		INT_TYPE_VAR,	DEFAULT_FLOOD_MASKUSER, NULL, NULL, 0, 0 },
 	{ "FLOOD_RATE",			INT_TYPE_VAR,	DEFAULT_FLOOD_RATE, NULL, NULL, 0, 0 },
+	{ "FLOOD_RATE_PER",		INT_TYPE_VAR,	DEFAULT_FLOOD_RATE_PER, NULL, NULL, 0, 0 },
 	{ "FLOOD_USERS",		INT_TYPE_VAR,	DEFAULT_FLOOD_USERS, NULL, NULL, 0, 0 },
 	{ "FLOOD_WARNING",		BOOL_TYPE_VAR,	DEFAULT_FLOOD_WARNING, NULL, NULL, 0, 0 },
 	{ "FULL_STATUS_LINE",		BOOL_TYPE_VAR,	DEFAULT_FULL_STATUS_LINE, NULL, update_all_status, 0, 0 },
@@ -187,7 +192,7 @@ static	IrcVariable irc_variable[] =
         { "MODE_STRIPPER",              BOOL_TYPE_VAR,  DEFAULT_MODE_STRIPPER, NULL, NULL, 0, 0 },
 	{ "ND_SPACE_MAX",		INT_TYPE_VAR,	DEFAULT_ND_SPACE_MAX, NULL, NULL, 0, 0 },
 	{ "NEW_SERVER_LASTLOG_LEVEL",	STR_TYPE_VAR,	0, NULL, set_new_server_lastlog_level, 0, 0 },
-	{ "NOTIFY_INTERVAL",		INT_TYPE_VAR,	DEFAULT_NOTIFY_INTERVAL, NULL, NULL, 0, 0 },
+	{ "NOTIFY_INTERVAL",		INT_TYPE_VAR,	DEFAULT_NOTIFY_INTERVAL, NULL, set_notify_interval, 0, 0 },
 	{ "NOTIFY_LEVEL",		STR_TYPE_VAR,	0, NULL, set_notify_level, 0, 0 },
 	{ "NOTIFY_ON_TERMINATION",	BOOL_TYPE_VAR,	DEFAULT_NOTIFY_ON_TERMINATION, NULL, NULL, 0, 0 },
 	{ "NOTIFY_USERHOST_AUTOMATIC",	BOOL_TYPE_VAR,	DEFAULT_NOTIFY_USERHOST_AUTOMATIC, NULL, NULL, 0, 0 },
@@ -475,6 +480,25 @@ int 	do_boolean (char *str, int *value)
 	else
 		return (1);
 	return (0);
+}
+
+/*
+ * get_variable_index: converts a string into an offset into the set table.
+ * Returns NUMBER_OF_VARIABLES if varname doesn't exist.
+ */
+enum VAR_TYPES get_variable_index (const char *varname)
+{
+	enum VAR_TYPES	retval;
+	int	cnt;
+
+	find_fixed_array_item(irc_variable, sizeof(IrcVariable), 
+				NUMBER_OF_VARIABLES, varname, &cnt, 
+				(int *)&retval);
+
+	if (cnt < 0)
+		return retval;
+
+	return NUMBER_OF_VARIABLES;
 }
 
 /*
@@ -800,23 +824,22 @@ void 	save_variables (FILE *fp, int do_all)
 
 char 	*make_string_var (const char *var_name)
 {
-	int	cnt,
-		msv_index;
+	enum VAR_TYPES	msv_index;
 	char	*ret = (char *) 0;
 	char	*copy;
 
 	copy = LOCAL_COPY(var_name);
 	upper(copy);
 
-	if (find_fixed_array_item (irc_variable, sizeof(IrcVariable), NUMBER_OF_VARIABLES, copy, &cnt, &msv_index) == NULL)
-		return NULL;
-	if (cnt >= 0)
+	msv_index = get_variable_index(copy);
+	if (msv_index == NUMBER_OF_VARIABLES)
 		return NULL;
 
 	switch (irc_variable[msv_index].type)
 	{
 		case STR_TYPE_VAR:
-			ret = m_strdup(irc_variable[msv_index].string);
+            if (irc_variable[msv_index].string)
+			    ret = m_strdup(irc_variable[msv_index].string);
 			break;
 		case INT_TYPE_VAR:
 			ret = m_strdup(ltoa(irc_variable[msv_index].integer));
@@ -1022,24 +1045,32 @@ static	void	set_scroll (int value)
 	window_display = owd;
 }
 
+static	void	set_notify_interval (int value)
+{
+	if (value < MINIMUM_NOTIFY_INTERVAL)
+	{
+		say("The /SET NOTIFY_INTERVAL value must be at least %d",
+			MINIMUM_NOTIFY_INTERVAL);
+		set_int_var(NOTIFY_INTERVAL_VAR, MINIMUM_NOTIFY_INTERVAL);
+	}
+}
+
 /*******/
 typedef struct	varstacklist
 {
-	int 		which;
-	IrcVariable 	*set;
-	char		*name;
-	int		var_index;
+	char *	varname;
+	char *	value;
 	struct varstacklist *next;
 }	VarStack;
 
 VarStack *set_stack = NULL;
 
-void do_stack_set(int type, char *args)
+void	do_stack_set (int type, char *args)
 {
-	VarStack *aptr = set_stack;
-	VarStack **aptrptr = &set_stack;
+	VarStack *item;
+	char *varname = NULL;
 
-	if (!*aptrptr && (type == STACK_POP || type == STACK_LIST))
+	if (set_stack == NULL && (type == STACK_POP || type == STACK_LIST))
 	{
 		say("Set stack is empty!");
 		return;
@@ -1047,81 +1078,77 @@ void do_stack_set(int type, char *args)
 
 	if (STACK_PUSH == type)
 	{
-		enum VAR_TYPES var_index;
-		int cnt = 0;
-
-		upper(args);
-		find_fixed_array_item (irc_variable, sizeof(IrcVariable), NUMBER_OF_VARIABLES, args, &cnt, (int *)&var_index);
-
-		if (cnt < 0 || cnt == 1)
+		varname = next_arg(args, &args);
+		if (!varname)
 		{
-			aptr = (VarStack *)new_malloc(sizeof(VarStack));
-			aptr->next = aptrptr ? *aptrptr : NULL;
-			*aptrptr = aptr;
-			aptr->set = (IrcVariable *) new_malloc(sizeof(IrcVariable));
-			*aptr->set = irc_variable[var_index];
-			aptr->name = m_strdup(irc_variable[var_index].name);
-			aptr->set->string = (irc_variable[var_index].string) ? m_strdup(irc_variable[var_index].string) : NULL;
-			aptr->var_index = var_index;
+			say("Must specify a variable name to stack");
+			return;
 		}
+		upper(varname);
+
+		item = (VarStack *)new_malloc(sizeof(VarStack));
+		item->varname = m_strdup(varname);
+		item->value = make_string_var(varname);
+
+		item->next = set_stack;
+		set_stack = item;
+		return;
+	}
+
+	else if (STACK_POP == type)
+	{
+	    VarStack *prev = NULL;
+	    enum VAR_TYPES var_index;
+	    int	owd = window_display;
+
+	    varname = next_arg(args, &args);
+	    if (!varname)
+	    {
+		say("Must specify a variable name to stack");
+		return;
+	    }
+	    upper(varname);
+
+	    for (item = set_stack; item; prev = item, item = item->next)
+	    {
+		/* If this is not it, go to the next one */
+		if (my_stricmp(varname, item->varname))
+			continue;
+
+		/* remove it from the list */
+		if (prev == NULL)
+			set_stack = item->next;
 		else
-			say("No such Set [%s]", args);
+			prev->next = item->next;
 
+		window_display = 0; 
+		var_index = get_variable_index(item->varname);
+		if (var_index == NUMBER_OF_VARIABLES)
+			return;		/* Do nothing */
+		set_var_value(var_index, item->value);
+		window_display = owd; 
+
+		new_free(&item->varname);
+		new_free(&item->value);
+		new_free(&item);
 		return;
+	    }
+
+	    say("%s is not on the Set stack!", varname);
+	    return;
 	}
 
-	if (STACK_POP == type)
+	else if (STACK_LIST == type)
 	{
-		VarStack *prev = NULL;
-		for (aptr = *aptrptr; aptr; prev = aptr, aptr = aptr->next)
-		{
-			/* have we found it on the stack? */
-			if (!my_stricmp(args, aptr->name))
-			{
-				/* remove it from the list */
-				if (prev == NULL)
-					*aptrptr = aptr->next;
-				else
-					prev->next = aptr->next;
+	    VarStack *prev = NULL;
 
-				new_free(&(irc_variable[aptr->var_index].string));
-				irc_variable[aptr->var_index] = *aptr->set;
+	    for (item = set_stack; item; prev = item, item = item->next)
+		say("Variable [%s] = %s", item->varname, item->value ? item->value : "<EMPTY>");
 
-				/* free it */
-				new_free((char **)&aptr->name);
-				new_free((char **)&aptr->set);
-				new_free((char **)&aptr);
-				return;
-			}
-		}
-		say("%s is not on the %s stack!", args, "Set");
-		return;
+	    return;
 	}
-	if (STACK_LIST == type)
-	{
-		VarStack *prev = NULL;
-		for (aptr = *aptrptr; aptr; prev = aptr, aptr = aptr->next)
-		{
-			switch(aptr->set->type)
-			{
-				case BOOL_TYPE_VAR:
-					say("Variable [%s] = %s", aptr->set->name, var_settings[aptr->set->integer]);
-					break;
-				case INT_TYPE_VAR:
-					say("Variable [%s] = %d", aptr->set->name, aptr->set->integer);
-					break;
-				case CHAR_TYPE_VAR:
-					say("Variable [%s] = %c", aptr->set->name, aptr->set->integer);
-					break;
-				case STR_TYPE_VAR:
-					say("Variable [%s] = %s", aptr->set->name, aptr->set->string?aptr->set->string:"<Empty String>");
-					break;
-				default:
-					say("Error in do_stack_set: unknown set type");
-			}
-		}
-		return;
-	}
-	say("Unknown STACK type ??");
+
+	else
+		say("Unknown STACK type ??");
 }
 

@@ -119,8 +119,6 @@ extern		char *	startup_file;
 extern		char *	irc_lib;
 extern		char *	irc_path;
 extern const 	char 	irc_version[];
-extern		char *	joined_nick;
-extern		char	lame_wait_nick[];
 extern		char *	last_notify_nick;
 extern		char *	LocalHostName;
 extern		char *	my_path;
@@ -128,7 +126,6 @@ extern		char	nickname[];
 extern		char	off[];
 extern		char	on[];
 extern		char	one[];
-extern		char *	public_nick;
 extern		char	realname[];
 extern	const	char	ridiculous_version_name[];
 extern	const unsigned long commit_id;
@@ -137,7 +134,6 @@ extern	const	char *	unknown_userhost;
 extern	const	char 	useful_info[];
 extern		char	username[];
 extern		char	userhost[];
-extern		char	wait_nick[];
 extern		char	zero[];
 extern		char	comma[];
 
@@ -146,6 +142,7 @@ extern 		ISA *	LocalIPv4Addr;
 extern		ISA6 *	LocalIPv6Addr;
 #endif
 extern		fd_set  readables;
+extern		fd_set  writables;
 extern struct timeval 	start_time;
 extern struct timeval	idle_time;
 extern struct timeval	now;
@@ -158,6 +155,7 @@ extern struct timeval	input_timeout;
 	void	io 			(const char *);
 	void	irc_exit 		(int, char *, ...) /*__A(2)*/ __N;
 	void	irc_quit 		(char, char *);
+	void	cpu_saver_off		(void);
 #include "reg.h"
 	void	dump_load_stack		(int);	 /* XXX command.c */
 const	char *	current_filename	(void);  /* XXX command.c */

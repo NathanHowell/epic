@@ -1,4 +1,4 @@
-/* $EPIC: irc.c,v 1.390.2.2 2003/02/27 12:17:24 wd Exp $ */
+/* $EPIC: irc.c,v 1.390.2.3 2003/02/27 15:29:56 wd Exp $ */
 /*
  * ircII: a new irc client.  I like it.  I hope you will too!
  *
@@ -40,19 +40,19 @@
 /*
  * irc_version is what $J returns, its the common-name for the version.
  */
-const char irc_version[] = "EPIC4-1.1.x-wd";
-const char useful_info[] = "epic4 1 1 7";
+const char irc_version[] = "EPIC4-1.1.10-wd";
+const char useful_info[] = "epic4 1 1 10";
 
 /*
  * internal_version is what $V returns, its the integer-id for the
  * version, and corresponds to the date of release, YYYYMMDD.
  */ 
-const char internal_version[] = "20020819";
+const char internal_version[] = "20021226";
 
 /*
  * In theory, this number is incremented for every commit.
  */
-const unsigned long	commit_id = 394;
+const unsigned long	commit_id = 471;
 
 /*
  * As a way to poke fun at the current rage of naming releases after
@@ -60,7 +60,7 @@ const unsigned long	commit_id = 394;
  * reality, I have decided to start doing that with EPIC.  These names
  * are intentionally and maliciously silly.  Complaints will be ignored.
  */
-const char ridiculous_version_name[] = "Specious";
+const char ridiculous_version_name[] = "Annoyance";
 
 #define __need_putchar_x__
 #include "status.h"
@@ -137,9 +137,6 @@ int		dont_connect = 0;
 
 /* Set to the current time, each time you press a key. */
 Timeval		idle_time = { 0, 0 };
-
-/* Set to the current input timeout as defined by KEY_INTERVAL */
-Timeval		input_timeout = { 0, 0 };
 
 /* Set to the time the client booted up */
 Timeval		start_time;
@@ -325,6 +322,7 @@ void	irc_exit (int really_quit, char *format, ...)
 #endif
 	close_all_servers(buffer);
 	logger(0);
+	get_child_exit(-1);  /* In case some children died in the exit hook. */
 	clean_up_processes();
 
 	/* Arrange to have the cursor on the input line after exit */
@@ -806,16 +804,15 @@ static	void	parse_args (int argc, char **argv)
 void	io (const char *what)
 {
 static	const	char	*caller[51] = { NULL }; /* XXXX */
-	static	int	first_time = 1,
-			level = 0;
-static struct timeval	right_away,
-			timer,
-			*timeptr = NULL;
-		int	dccs;
-		fd_set	rd;
+static	int		level = 0,
+			old_level = 0,
+			last_warn = 0;
+static 	Timeval		right_away = { 0, 0 };
 
-	static	int	old_level = 0;
-	static	int	last_warn = 0;
+	Timeval		timer;
+	int		dccs;
+	fd_set		rd, wd;
+
 
 	level++;
 	get_time(&now);
@@ -845,51 +842,42 @@ static struct timeval	right_away,
 
 	caller[level] = what;
 
-	/* first time we run this function, set up the timeouts */
-	if (first_time)
-	{
-		first_time = 0;
-
-		right_away.tv_usec = 0L;
-		right_away.tv_sec = 0L;
-
-		timer.tv_usec = 0L;
-	}
-
-	/* CHECK FOR CPU SAVER MODE */
-	if (!cpu_saver && get_int_var(CPU_SAVER_AFTER_VAR))
-		if (now.tv_sec - idle_time.tv_sec > get_int_var(CPU_SAVER_AFTER_VAR) * 60)
-			cpu_saver_on(0, NULL);
+#if 1
+	/* 
+	 * XXXXXXX! It pains me greatly to call this here.
+	 * This is an experimental test to see if i can get
+	 * away with not having to call update_all_windows()
+	 * in about a zillion other places by doing it here.
+	 */
+	update_all_windows();
+#endif
 
 	/* SET UP FD SETS */
 	rd = readables;
+	wd = writables;
 
 	/* If there is a timer that expires sooner, wait for that */
 	/* There is now a timer at all times, so this is our baseline */
 	timer = TimerTimeout();
-	timeptr = &timer;
-
-	/* If there is an input timeout that expires sooner, wait for that */
-	if (time_diff(*timeptr, input_timeout) < 0)
-		timeptr = &input_timeout;
 
 	/* If there is a dead dcc, then do a poll */
 	if ((dccs = dcc_dead()))		/* XXX HACK! XXX */
-		timeptr = &right_away;
+		timer = right_away;
 
 	/* If for any reason the timeout is negative, do a poll */
-	if (time_diff(right_away, *timeptr) < 0)
-		timeptr = &right_away;
+	if (time_diff(right_away, timer) < 0)
+		timer = right_away;
 
 	/* GO AHEAD AND WAIT FOR SOME DATA TO COME IN */
-	switch (new_select(&rd, NULL, timeptr))
+	switch (new_select(&rd, &wd, &timer))
 	{
 		/* Timeout -- nothing interesting. */
 		case 0:
 		{
+			get_time(&now);
 #ifdef HAVE_SSL
 			/* Yes, this is slow, but we have to check for this */
-			do_server(&rd);
+			do_server(&rd, &wd);
 #endif
 			break;
 		}
@@ -897,6 +885,7 @@ static struct timeval	right_away,
 		/* Interrupted system call -- check for SIGINT */
 		case -1:
 		{
+			get_time(&now);
 			if (cntl_c_hit)		/* SIGINT is useful */
 			{
 				edit_char('\003');
@@ -910,20 +899,20 @@ static struct timeval	right_away,
 		/* Check it out -- something is on one of our descriptors. */
 		default:
 		{
+			get_time(&now);
 			make_window_current(NULL);
-			dcc_check(&rd);
-			do_server(&rd);
-			do_processes(&rd);
-			do_screens(&rd);
+			dcc_check(&rd, &wd);
+			do_server(&rd, &wd);
+			do_processes(&rd, &wd);
+			do_screens(&rd, &wd);
 			break;
 		} 
 	}
 
 	if (dccs)			/* XXX HACK XXX */
-		dcc_check(&rd);		/* XXX HACK XXX */
+		dcc_check(&rd, &wd);	/* XXX HACK XXX */
 
 	ExecuteTimers();
-	do_input_timeouts(); /* run through input timeouts */
 	get_child_exit(-1);
 	if (level == 1 && need_defered_commands)
 		do_defered_commands();
@@ -1095,28 +1084,72 @@ static void check_invalid_host (void)
 	return;
 }
 
+/**************************************************************************/
+
 /*
  * I moved this here, because it didnt really belong in status.c
  */
 int	do_every_minute (void *ignored)
 {
-	static	int	first_call = 1;
+	/* Schedule the next instance */
+	if (!cpu_saver && get_int_var(CPU_SAVER_AFTER_VAR))
+		if (now.tv_sec - idle_time.tv_sec > 
+				get_int_var(CPU_SAVER_AFTER_VAR) * 60)
+			cpu_saver_on(0, NULL);
 
-	if (first_call)
+	if (cpu_saver)
 	{
-		add_timer(0, system_timer2, 60.0, -1, do_every_minute,
-				NULL, NULL, NULL);
-		first_call = 0;
-	}
+	    double timeout = 0;
 
+	    if ((timeout = get_int_var(CPU_SAVER_EVERY_VAR)) < 60)
+		timeout = 60.0;
+	    add_timer(0, system_timer, timeout, 
+			1, do_every_minute, NULL, NULL, -1);
+	}
+	else
+	    add_timer(0, system_timer, time_to_next_minute(), 
+			1, do_every_minute, NULL, NULL, -1);
+
+	/* Now what do we want to do every minute? */
 	update_clock(RESET_TIME);
-	do_notify();
 	if (get_int_var(CLOCK_VAR) || check_mail_status(NULL))
 	{
 		update_all_status();
 		cursor_to_input();
 	}
 	return 0;
+}
+
+int	do_notify_stuff (void *ignored)
+{
+	/*
+	 * If CPU saver has been turned on, then ratchet down NOTIFY as well.
+	 */
+	if (cpu_saver)
+	{
+	    double timeout = 0;
+
+	    if ((timeout = get_int_var(CPU_SAVER_EVERY_VAR)) < 60)
+		timeout = 60.0;
+	    add_timer(0, system_timer2, timeout, 
+			1, do_notify_stuff, NULL, NULL, -1);
+	}
+	else
+	    add_timer(0, system_timer2, get_int_var(NOTIFY_INTERVAL_VAR),
+			1, do_notify_stuff, NULL, NULL, -1);
+
+	do_notify();
+	return 0;
+}
+
+void	cpu_saver_off (void)
+{
+	cpu_saver = 0;
+	update_all_status();
+	add_timer(1, system_timer, time_to_next_minute(), 
+			1, do_every_minute, NULL, NULL, -1);
+	add_timer(1, system_timer2, time_to_next_minute(),
+			1, do_notify_stuff, NULL, NULL, -1);
 }
 
 /*
@@ -1134,13 +1167,13 @@ static	char	*strftime_12hour = "%I:%M%p";
 	int	broken_clock = 0;
 
 /* update_clock: figures out the current time and returns it in a nice format */
-char	*update_clock (int flag)
+char *	update_clock (int flag)
 {
 static		char	time_str[61];
 static		int	min = -1;
 static		int	hour = -1;
 
-	struct	timeval	tv;
+		Timeval	tv;
 static 	struct 	tm	time_val;
 static		time_t	last_minute = -1;
 		time_t	hideous;
@@ -1299,10 +1332,12 @@ int 	main (int argc, char *argv[])
 	if (dont_connect)
 		display_server_list();		/* Let user choose server */
 	else
-		reconnect(-1, 0);		/* Connect to default server */
+		reconnect(NOSERV, 0);		/* Connect to default server */
 
 	add_timer(0, system_timer, time_to_next_minute(), 1,
-			do_every_minute, NULL, NULL, NULL);
+			do_every_minute, NULL, NULL, -1);
+	add_timer(0, system_timer2, time_to_next_minute(), 1,
+			do_notify_stuff, NULL, NULL, -1);
 
 	get_time(&idle_time);
 	for (;;)

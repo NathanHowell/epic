@@ -10,6 +10,7 @@ void clean_server_queues (int);
 
 /* WHO queue */
 
+/* XXX This should be in who.c */
 typedef struct WhoEntryT
 {
 	int  dirty;
@@ -28,18 +29,19 @@ typedef struct WhoEntryT
 	char *who_stuff;
 	char *who_end;
         struct WhoEntryT *next;
-	void (*line) (char *, char **);
-	void (*end) (char *, char **);
+	void (*line) (int, const char *, const char *, const char **);
+	void (*end) (int, const char *, const char *, const char **);
 
 } WhoEntry;
 
 	BUILT_IN_COMMAND(whocmd);
-	void 	whobase (char *, void (*)(char *, char **), 
-				void (*)(char *, char **));
-	void 	whoreply (char *, char **);
-	void 	xwhoreply (char *, char **);
-	void 	who_end (char *, char **);
-	int 	fake_who_end (char *, char *);
+	void 	whobase (int, char *, 
+		   void (*)(int, const char *, const char *, const char **), 
+		   void (*)(int, const char *, const char *, const char **));
+	void 	whoreply (int, const char *, const char *, const char **);
+	void 	xwhoreply (int, const char *, const char *, const char **);
+	void 	who_end (int, const char *, const char *, const char **);
+	int 	fake_who_end (int, const char *, const char *, const char *);
 
 
 
@@ -50,12 +52,12 @@ typedef struct IsonEntryT
 	char *ison_asked;
 	char *ison_got;
 	struct IsonEntryT *next;
-	void (*line) (char *, char *);
+	void (*line) (int, char *, char *);
 } IsonEntry;
 
 	BUILT_IN_COMMAND(isoncmd);
-	void 	isonbase 	(char *args, void (*line) (char *, char *));
-	void 	ison_returned 	(char *, char **);
+	void 	isonbase 	(int refnum, char *args, void (*line) (int, char *, char *));
+	void 	ison_returned 	(int, const char *, const char *, const char **);
 
 
 
@@ -76,17 +78,16 @@ typedef struct UserhostEntryT
 	char *		userhost_asked;
 	char *		text;
 	struct UserhostEntryT *	next;
-	void 		(*func) (UserhostItem *, char *, char *);
+	void 		(*func) (int, UserhostItem *, const char *, const char *);
 } UserhostEntry;
 
 	BUILT_IN_COMMAND(userhostcmd);
 	BUILT_IN_COMMAND(useripcmd);
 	BUILT_IN_COMMAND(usripcmd);
-	void 	userhostbase 		(char *arg, 
-					void (*line) (UserhostItem *, 
-							char *, char *), 
-					int);
-	void 	userhost_returned 	(char *, char **);
-	void 	userhost_cmd_returned 	(UserhostItem *, char *, char *);
+	void 	userhostbase 		(int refnum, char *arg, 
+					void (*line) (int, UserhostItem *, 
+						const char *, const char *), int);
+	void 	userhost_returned 	(int, const char *, const char *, const char **);
+	void 	userhost_cmd_returned 	(int, UserhostItem *, const char *, const char *);
 
 #endif 

@@ -1,4 +1,4 @@
-/* $EPIC: ctcp.c,v 1.16 2002/11/08 23:36:12 jnelson Exp $ */
+/* $EPIC: ctcp.c,v 1.16.2.1 2003/02/27 15:29:55 wd Exp $ */
 /*
  * ctcp.c:handles the client-to-client protocol(ctcp). 
  *
@@ -80,7 +80,7 @@ static	int 	split_CTCP (char *, char *, char *);
  */
 
 struct _CtcpEntry;
-typedef char *(*CTCP_Handler) (struct _CtcpEntry *, char *, char *, char *);
+typedef char *(*CTCP_Handler) (struct _CtcpEntry *, const char *, const char *, char *);
 typedef	struct _CtcpEntry
 {
 	char		*name;  /* name of ctcp datatag */
@@ -92,19 +92,19 @@ typedef	struct _CtcpEntry
 }	CtcpEntry;
 
 /* forward declarations for the built in CTCP functions */
-static	char	*do_sed 	(CtcpEntry *, char *, char *, char *);
-static	char	*do_version 	(CtcpEntry *, char *, char *, char *);
-static	char	*do_clientinfo 	(CtcpEntry *, char *, char *, char *);
-static	char	*do_ping 	(CtcpEntry *, char *, char *, char *);
-static	char	*do_echo 	(CtcpEntry *, char *, char *, char *);
-static	char	*do_userinfo 	(CtcpEntry *, char *, char *, char *);
-static	char	*do_finger 	(CtcpEntry *, char *, char *, char *);
-static	char	*do_time 	(CtcpEntry *, char *, char *, char *);
-static	char	*do_atmosphere 	(CtcpEntry *, char *, char *, char *);
-static	char	*do_dcc 	(CtcpEntry *, char *, char *, char *);
-static	char	*do_utc 	(CtcpEntry *, char *, char *, char *);
-static	char	*do_dcc_reply 	(CtcpEntry *, char *, char *, char *);
-static	char	*do_ping_reply 	(CtcpEntry *, char *, char *, char *);
+static	char	*do_sed 	(CtcpEntry *, const char *, const char *, char *);
+static	char	*do_version 	(CtcpEntry *, const char *, const char *, char *);
+static	char	*do_clientinfo 	(CtcpEntry *, const char *, const char *, char *);
+static	char	*do_ping 	(CtcpEntry *, const char *, const char *, char *);
+static	char	*do_echo 	(CtcpEntry *, const char *, const char *, char *);
+static	char	*do_userinfo 	(CtcpEntry *, const char *, const char *, char *);
+static	char	*do_finger 	(CtcpEntry *, const char *, const char *, char *);
+static	char	*do_time 	(CtcpEntry *, const char *, const char *, char *);
+static	char	*do_atmosphere 	(CtcpEntry *, const char *, const char *, char *);
+static	char	*do_dcc 	(CtcpEntry *, const char *, const char *, char *);
+static	char	*do_utc 	(CtcpEntry *, const char *, const char *, char *);
+static	char	*do_dcc_reply 	(CtcpEntry *, const char *, const char *, char *);
+static	char	*do_ping_reply 	(CtcpEntry *, const char *, const char *, char *);
 
 
 static CtcpEntry ctcp_cmd[] =
@@ -167,7 +167,7 @@ int     sed = 0;
 int	in_ctcp_flag = 0;
 
 #define CTCP_HANDLER(x) \
-	static char * x (CtcpEntry *ctcp, char *from, char *to, char *cmd)
+	static char * x (CtcpEntry *ctcp, const char *from, const char *to, char *cmd)
 
 
 
@@ -182,8 +182,8 @@ int	in_ctcp_flag = 0;
 CTCP_HANDLER(do_sed)
 {
 	Crypt	*key = NULL;
-	char	*crypt_who,
-		*tofrom;
+	const char	*crypt_who;
+	char 	*tofrom;
 	char	*ret = NULL, *ret2 = NULL;
 
 	if (*from == '=')		/* DCC CHAT message */
@@ -213,9 +213,9 @@ CTCP_HANDLER(do_sed)
 		 * There might be a CTCP message in there,
 		 * so we see if we can find it.
 		 */
-		if (doing_privmsg())
+		if (get_server_doing_privmsg(from_server))
 			ret2 = m_strdup(do_ctcp(from, to, ret));
-		else if (doing_notice())
+		else if (get_server_doing_notice(from_server))
 			ret2 = m_strdup(do_notice_ctcp(from, to, ret));
 		sed = 1;
 	}
@@ -498,11 +498,11 @@ CTCP_HANDLER(do_dcc_reply)
  */
 CTCP_HANDLER(do_ping_reply)
 {
-	struct timeval 	t;
-	time_t 		tsec = 0, 
-			tusec = 0, 
-			orig;
-	char *		ptr;
+	Timeval t;
+	time_t 	tsec = 0, 
+		tusec = 0, 
+		orig;
+	char *	ptr;
 
 	if (!cmd || !*cmd)
 		return NULL;		/* This is a fake -- cant happen. */
@@ -562,7 +562,7 @@ CTCP_HANDLER(do_ping_reply)
  * doesnt have to do a write unless the character is present.  So it is 
  * definitely worth the cost to save CPU time for 99% of the PRIVMSGs.
  */
-char *	do_ctcp (char *from, char *to, char *str)
+char *	do_ctcp (const char *from, const char *to, char *str)
 {
 	int 	flag;
 	int	fflag;
@@ -625,7 +625,7 @@ static	time_t	last_ctcp_parsed = 0;
 		 * Check to see if the user is ignoring person.
 		 * Or if we're suppressing a flood.
 		 */
-		if (flag == IGNORED || fflag == 0)
+		if (flag == IGNORED || fflag == 1)
 		{
 			if (x_debug & DEBUG_CTCPS)
 				yell("CTCP from [%s] ignored", from);
@@ -794,7 +794,7 @@ static	time_t	last_ctcp_parsed = 0;
  * do_notice_ctcp: a re-entrant form of a CTCP reply parser.
  * See the implementation notes in do_ctcp().
  */
-char *	do_notice_ctcp (char *from, char *to, char *str)
+char *	do_notice_ctcp (const char *from, const char *to, char *str)
 {
 	int 	flag;
 	int	lastlog_level;
@@ -928,7 +928,7 @@ int	in_ctcp (void) { return (in_ctcp_flag); }
  * transparantly.  This greatly reduces the logic, complexity, and
  * possibility for error in this function.
  */
-void	send_ctcp (int type, char *to, int datatag, char *format, ...)
+void	send_ctcp (int type, const char *to, int datatag, char *format, ...)
 {
 	char 	putbuf [BIG_BUFFER_SIZE + 1],
 		*putbuf2;
@@ -971,99 +971,6 @@ void	send_ctcp (int type, char *to, int datatag, char *format, ...)
 	send_text(to, putbuf2, ctcp_type[type], 0);
 }
 
-
-/*
- * quote_it: This quotes the given string making it sendable via irc.  A
- * pointer to the length of the data is required and the data need not be
- * null terminated (it can contain nulls).  Returned is a malloced, null
- * terminated string.
- */
-char	*ctcp_quote_it (char *str, int len)
-{
-	char	buffer[BIG_BUFFER_SIZE + 1];
-	char	*ptr;
-	int	i;
-
-	ptr = buffer;
-	for (i = 0; i < len; i++)
-	{
-		switch (str[i])
-		{
-			case CTCP_DELIM_CHAR:	*ptr++ = CTCP_QUOTE_CHAR;
-						*ptr++ = 'a';
-						break;
-			case '\n':		*ptr++ = CTCP_QUOTE_CHAR;
-						*ptr++ = 'n';
-						break;
-			case '\r':		*ptr++ = CTCP_QUOTE_CHAR;
-						*ptr++ = 'r';
-						break;
-			case CTCP_QUOTE_CHAR:	*ptr++ = CTCP_QUOTE_CHAR;
-						*ptr++ = CTCP_QUOTE_CHAR;
-						break;
-			case '\0':		*ptr++ = CTCP_QUOTE_CHAR;
-						*ptr++ = '0';
-						break;
-			default:		*ptr++ = str[i];
-						break;
-		}
-	}
-	*ptr = '\0';
-	return m_strdup(buffer);
-}
-
-/*
- * ctcp_unquote_it: This takes a null terminated string that had previously
- * been quoted using ctcp_quote_it and unquotes it.  Returned is a malloced
- * space pointing to the unquoted string.  NOTE: a trailing null is added for
- * convenied, but the returned data may contain nulls!.  The len is modified
- * to contain the size of the data returned. 
- */
-char	*ctcp_unquote_it (char *str, size_t *len)
-{
-	char	*buffer;
-	char	*ptr;
-	char	c;
-	int	i,
-		new_size = 0;
-
-	buffer = (char *) new_malloc(sizeof(char) * *len + 1);
-	ptr = buffer;
-	i = 0;
-	while (i < *len)
-	{
-		if ((c = str[i++]) == CTCP_QUOTE_CHAR)
-		{
-			switch (c = str[i++])
-			{
-				case CTCP_QUOTE_CHAR:
-					*ptr++ = CTCP_QUOTE_CHAR;
-					break;
-				case 'a':
-					*ptr++ = CTCP_DELIM_CHAR;
-					break;
-				case 'n':
-					*ptr++ = '\n';
-					break;
-				case 'r':
-					*ptr++ = '\r';
-					break;
-				case '0':
-					*ptr++ = '\0';
-					break;
-				default:
-					*ptr++ = c;
-					break;
-			}
-		}
-		else
-			*ptr++ = c;
-		new_size++;
-	}
-	*ptr = '\0';
-	*len = new_size;
-	return (buffer);
-}
 
 int 	get_ctcp_val (char *str)
 {

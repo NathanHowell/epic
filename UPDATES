@@ -1,242 +1,244 @@
 EPIC4-1.2.0
 
-*** News 11/07/2002 -- /XECHO -W now takes channel argument
-	Until now, the argument to /XECHO -W had to be a window refnum.
-	Now you can provide a channel as the argument, and epic will 
-	output to that channel's window.  Please be aware that the channel
-	you provide will be looked for in the "current server", so make
-	sure that is really what you want.  This is useful in /ONs when
-	you want to output something but you can't be bothered to look up
-	the channel's refnum.  For example:
-		on join * { xecho -w $1 BOOYA BOOYA BOOYA BOO!  }
+*** News 02/25/2003 -- Added %{1}D status variable.
+	This acts exactly like %D, but is present on all windows where
+	%D is present only on the window that has the DCC lastlog level.
 
-*** News 11/07/2002 -- $center() improved
-	$center() was rewritten here, so if you see any problems, this is
-	probably when they were introduced.
+*** News 02/25/2003 -- Added DCC hold mode.
+	$dccctl(set [ref] held 1) puts a dcc session on hold.
+	$dccctl(set [ref] held 0) releases the hold.
 
-*** News 11/07/2002 -- $geom() can now take a window reference
-	Until now, $geom() returned the size of the screen as reported 
-	by your TERM setting.  This was not always entirely useful.  The
-	size returned is now always the 'true size' of the screen.  You 
-	can also give it a window reference (eg, on another screen) to get
-	the geometry of a secondary screen.  This is important now that 
-	screens can be independantly sized.
+	When a dcc session is on hold, no data is sent to it or received
+	from it until the hold is released.  This might be useful for
+	bandwidth control or for granting priority to other unheld dccs.
 
-*** News 11/07/2002 -- /WINDOW NAME now takes extended words as arguments
-	You can now give a window a name with spaces in it by surrounding
-	the entire name with double quotes.  For example:
-		/window name "My Window #1"
+*** News 02/17/2003 -- New function $findws().
+	Similar to $findw() but returns _all_ matching words.
 
-*** News 09/27/2002 -- New function $logctl() - control logfiles
-	This has actually existed since 09/03/2002, but I forgot to document
-	it, so here goes!
+*** News 02/17/2003 -- New functions ${no}chhops() in the functions script.
+	Returns halfops in a channel (or not) like $chops() and $nochops().
 
-	Usage:
-	------
-	$logctl(REFNUM log-desc)
-	$logctl(ADD log-desc [target])
-	$logctl(DELETE log-desc [target])
-	$logctl(GET <refnum> [ITEM])
-	$logctl(SET <refnum> [ITEM] [VALUE])
-	$logctl(MATCH [pattern])
-	$logctl(PMATCH [pattern])
+*** News 02/17/2003 -- New functions $finditems() and $ifinditems()
+	These functions work much like $finditem() and $ifinditem() but
+	they perform substring searches.  If the substring is found in the
+	Karll array, then _a_ matching item/index number is returned.  If
+	the substring is not found, the twos compliment (negative minus 1)
+	of the (index) insertion point is returned.
 
-	where [ITEM] is one of the following
-	      REFNUM          The refnum for the log (GET only)
-	      NAME            The logical name for the log
-	      FILENAME        The filename this log writes to
-	      SERVER          The server this log associates with (-1 for any)
-	      TARGETS         All of the targets for this log
-	      LEVEL           The Lastlog Level for this log
-	      REWRITE         The rewrite rule for this log
-	      MANGLE          The mangle rule for this log
-	      STATUS          1 if log is on, 0 if log is off.
-              TYPE            The type of the log (SERVERS, WINDOWS, TARGETS)
+*** News 02/17/2003 -- New function $dccctl()
+	Introducing the newest member of our nice little family of
+	bolt-ons, $dccctl(), which does many of the things related to DCC
+	that are otherwise extremely difficult.
 
-*** News 09/26/2002 -- New /WINDOW verbs, SEARCH_BACK and SEARCH_FORWARD
-	These two window verbs take a regular expression (regex) and scroll
-	backward or scroll forward to the previous or next line which 
-	matches the regex, and makes that matching line the top of the 
-	screen.  For example:
-		/WINDOW SEARCH_BACK foo
-	will scroll your window backwards until it finds a line that 
-	contains the string "foo"; that line will be put at the top of 
-	the window.
+	$dccctl(refnums)	returns all open DCCs.
+	$dccctl(get [refnum] [element])
+	$dccctl(set [refnum] [element])
+	$dccctl(descmatch [pattern])
+	$dccctl(filematch [pattern])
+	$dccctl(usermatch [pattern])
+	$dccctl(othermatch [pattern])
+	$dccctl(locked)		returns all locked dccs.
 
-	If you search backwards or forwards, and there are no matches
-	in the direction you're going, then this operation will beep 
-	and will not change your display.
+	[element] can be one of:
+	refnum        $dccctl() reference number
+	type           (get only)
+	description    (get only)
+	filename       (get only)
+	user           (get only)
+	othername      (get only)
+	encrypt        (get only) (unused)
+	filesize      size of the transfer (get only)
+	resumesize    size that the transfer was resumed at (get only)
+	readbytes     number of bytes xfered (get only)
+	sentbytes     number of bytes xfered (get only)
+	server        from which the dcc was triggered (get only)
+	locked         (get only) (see below)
+	remaddr       remote address (get only)
+	locaddr       local address  (get only)
+	starttime     of the transfer (get only)
+	lasttime      ? (get only)
 
-	Please remember that these operations put you into scrollback mode,
-	so you will need to use the SCROLL_END keybinding to see any new 
-	output that arrives.
+	Note that the refnum concept is new to DCC and applies only to
+	$dccctl().  This is necessary to nail down exactly which DCC is
+	being refered to, but it is no help trying to find the current
+	dcc in a DCC_LIST hook for eg.  The best way to work with this is
+	to use the "locked" keyword since epic locks a dcc before calling
+	any hook refering to it.
 
-*** News 09/26/2002 -- Decoupling of /FLUSH and /WINDOW FLUSH
-	Previously, if you did /FLUSH, it threw away data from the server
-	and also threw away your hold buffer.  Now that there is no hold
-	buffer, it becomes less sensible for /FLUSH to force you to throw
-	away something that doesn't really exist.  So /FLUSH now only
-	throws away data from the server but does not mess with your
-	scrollback buffer.  If you want to mess with your scrollback buffer
-	you can of course always do /WINDOW FLUSH.
+	The *match sub-functions return the refnums of all matching DCCs.
 
-*** News 09/26/2002 -- Refinement of /WINDOW FLUSH
-	Now that there is no distinction between the scrollback buffer and
-	the hold buffer, it is not possible for /WINDOW FLUSH to remove the
-	hold buffer.  So /WINDOW FLUSH has changed; what it does now is throw
-	away everything in your scrollback buffer below whatever is currently
-	on your screen, and it turns off /WINDOW HOLD_MODE and it turns of
-	scrollback mode.
+*** News 02/06/2003 -- New functions in script/functions
+	Did to $timerctl() what was done to $serverctl() a few pages down.
+	As with that command, this will change the way that subcommands
+	are selected in ambiguous cases.
 
-*** News 09/26/2002 -- Mostly broken feature /WINDOW SCROLL now totaly broken
-	The /WINDOW SCROLL feature which did not work properly now is 
-	completely useless.  The value of /WINDOW SCROLL is ignored; all
-	windows must scroll.
+*** News 02/06/2003 -- New functions in script/functions
+	$min() and $max() (implemented elsewhere)
+	$regpattern() simulates $pattern() with regexes.
+	$regfilter() simulates $filter() with regexes.
+	$index2wword() simulates $index2word() but ignores quotes.
+	$jotm() for $jot()ing multiple ranges.
+	$jotc() for $jot()ing character ranges.
+	$maskm() simulates $mask() with multiple n!u@h args.
+	$randn() returns multiple random numbers.
+	$replace(xy y 1 2 3) returns "x1 x2 x3".
+	$shuffle*() returns all arguments shuffled randomly.
+	$uniqd() simulates the shell command "uniq -d".
+	$wordn() emulates $word() but permits multiple word specs.
+	$cut() simulates the "cut" shell command".
+	$chvoices() returns voiced nicks on a channel.
+	$chnovoices() returns unvoiced nicks on a channel.
 
-*** News 09/26/2002 -- Refinement of meaning of /WINDOW HOLD_MODE ON
-	When you have /WINDOW HOLD_MODE on, the top of the window is fixed;
-	it is held; it will not move unless you move it.  Now that the hold
-	buffer and scrollback buffer are fully integrated, you can move 
-	forward through the hold buffer by using the SCROLL_FORWARD keybinding,
-	just as if you were being scrolled back.  Please remember that if you
-	have /WINDOW HOLD_MODE ON, it does not act like normal scrollback 
-	functionality; when you reach the bottom of the hold buffer, it will
-	never automatically turn HOLD_MODE off.  You must do that yourself.
-	This is to maintain backwards compatability.
+*** News 02/03/2003 -- Implement /SET SUPPRESS_SERVER_MOTD in script
+	If you were a previous user of /SET SUPPRESS_SERVER_MOTD ON,
+	then you will want to add 
+			load suppressmotd
+	to your ~/.ircrc.  This re-implements this /SET.  And hopefully
+	this script actually works, unlike the /SET.  If you have any
+	problems, let me know, and I'll try to fix it.  If you want to
+	try to improve it, please feel free and send me patches.
 
-*** News 09/26/2002 -- /SET HOLD_MODE and /SET HOLD_MODE_INTERVAL now scripted
-	The /SET HOLD_MODE and /SET HOLD_MODE_INTERVAL sets have always been
-	aliases for /WINDOW HOLD_MODE and /WINDOW HOLD_MODE_INTERVAL.  So the
-	hardcoded /SETs have been removed from EPIC and script compatability
-	shims have been put into the 'basical' script which is loaded when
-	you start EPIC.  Unless you don't use epic's scripts, you will not
-	notice any change.
+	Make sure you do a 'make install' before you report not being
+	able to load this script as a bug!
 
-*** News 09/26/2002 -- Remove /WINDOW SCRATCH (unnecessary)
-	As part of the integration of scrollback and hold buffers, every
-	window was made capable of supporting /XECHO -LINE.  In simple
-	terms, every window is now a scratch window, so you no longer need
-	to /WINDOW SCRATCH ON before you use /XECHO -LINE.
+*** News 02/03/2003 -- $logctl(REFNUMS [ACTIVE|INACTIVE|ALL])
+	You can now do the following things with logfiles:
+		$logctl(REFNUMS ACTIVE)
+			returns all ACTIVE (on) logfiles
+		$logctl(REFNUMS INACTIVE)
+			returns all INACTIVE (off) logfiles
+		$logctl(REFNUMS ALL)
+			returns all logfiles
 
-*** News 09/26/2002 -- Finished integration of scrollback and hold buffers
-	The primary change you will notice is when you are using scrollback
-	and you reach the "scrollback point", you will no longer turbo-scroll
-	to the end of the hold buffer.  This annoying "feature" was due to
-	the incomplete integration of the scollback and hold buffers.  You
-	are now able to scroll back and forth freely through both the scroll
-	back and hold buffers, and you do not leave scrollback mode until you
-	reach the end of the hold buffer.
+*** News 02/03/2003 -- Logs now keep track of "last written time"
+	Each logfile now has an "activity timer" which is reset when
+	you first create the logfile, when you turn it on, or when you
+	turn it off, or when any output is written to the logfile.
+	You can work with this timer in the following ways:
 
-*** News 09/11/2002 -- New window verb, /WINDOW MOVE_TO
-	The /WINDOW MOVE_TO <N> verb makes the operative window the Nth 
-	window on the screen (counting from 1, just as /WINDOW GOTO does)
-	For example, if your screen has five windows, (A B C D E), and you 
-	go to window D and do /WINDOW MOVE_TO 2 then your screen will be 
-	re-ordered to (A D B C E).  If <N> is less than 1, then this 
-	command does nothing.  If <N> is greater than the number of windows
-	on the screen, the operative window is made the last window on 
-	the screen.  Nothing about the content of any window changes -- 
-	only the order they appear on the screen.
+		$logctl(GET <refnum> ACTIVITY)
+			returns the last time the logfile was written to
+		$logctl(SET <refnum> ACTIVITY)
+			resets the log file's activity timer to current time
+		/LOG <refnum> ACTIVITY
+			resets the log file's activity timer to current time
 
-*** News 09/03/2002 -- New built in command, /LOG, general purpose log files
-	General Purpose Log Files work quite a bit like windows, but instead
-	of displaying to your screen, they write to a file.
+*** News 02/03/2003 -- "Larnifications" to epic's server handling code
+	Traditionally, ircII clients have trusted the server to send
+	well formed data.  If messages from the server were badly formed
+	(for example, if arguments were missing or in the wrong order),
+	ircII clients (including epic of course) would crash.  Due to the
+	repeated requests of some server developers, and particularly 
+	because of larne, who used to make sport of epic by modifying his
+	server to send numeric garbage at epic to make it crash, a long
+	and substantial project to rewrite all of the code that handles
+	messages from the server has been undertaken.  This marks the end
+	of the first stage of the project, which protects epic from the
+	server sending not enough arguments, which would cause a crash.
+	Internally, I have referred to this as the "larnification project"
+	in honor of larne, the person who pushed me over the edge into 
+	doing this sooner rather than later.  I got his consent to use his
+	nickname like this, so please don't think I'm making fun of him.
+	For history's sake, this is an offshoot of the previous project
+	which was called "Larneproofing" which was a band-aid to prevent
+	most of the obvious problems caused by server's sending bad data.
+	This was a full rewrite of the protocol-handling code.
 
-	Each /LOG command works by choosing a logfile, and then performing
-	one or more actions upon it -- just like the /WINDOW command.
-	However, there is no concept as a "current logfile" so each time you
-	use the /LOG command you need to re-specify the log you want to use.
+*** News 02/03/2003 -- Changes to how and when notifies are done
+	Previously, NOTIFY events always occured at the top of every minute,
+	along with other things like the updating of the system clock and
+	/on timer.  But now NOTIFY has been broken off into its own separate
+	timer whose interval is controlled by /SET NOTIFY_INTERVAL (see below).
+	How this will work is that each notify event will occur precisely
+	/SET NOTIFY_INTERVAL seconds apart, except for the following cases!
 
-	These are the operations currently supported by /LOG
+	*) When the client starts up, the first notify event occurs at the
+	   top of the next minute *without regard to whatever the original
+	   value of /SET NOTIFY_INTERVAL is!*  After this first notify 
+	   event, the normal rules apply.
+	*) When you enter CPU_SAVER mode, the next notify event will occur 
+	   at its regular scheduled time, but subsequent notify events will
+	   occur at /SET CPU_SAVER_EVERY intervals!  (IE, /SET CPU_SAVER_EVERY
+	   overrides /SET NOTIFY_INTERVAL when you're in cpu saver mode)
+	*) When you leave CPU_SAVER mode, the next notify event will occur
+	   at the top of the next minute *without regard to whatever value
+	   of /set notify_interval!  After the top of the next minute, the
+	   regular rules apply.
 
-	Options that modify the log's configuration
-	-------------------------------------------
-		NEW		
-			Create a new logfile to work on.
-		REFNUM <name|number>
-			Work on the specified log file, using either it's
-			name (see below) or its refnum.
-		NAME <name>
-			Change the logical name of the logfile to <name>.
-			You can use <name> in /LOG REFNUM later.
-		FILENAME <name>
-			Change the filename that this log writes to.  You
-			MUST specify a filename before you can turn a log ON!
-		TYPE
-			Each logfile can log one of three different "types"
-			of things; either a list of nicks or channels 
-			("TARGETS"), a list of windows ("WINDOWS") or a list
-			of servers ("SERVERS").  The default type is TARGETS.
-			WARNING!  If you use /LOG TYPE, all of the current
-			targets you have added to the log will be destroyed,
-			even if you don't change the type!  This is how you 
-			can destroy the target list if you want to start over.
-		SERVER <server refnum>
-			Change the server this logfile belongs to.  By default
-			the log belongs to whatever the current server was
-			when it was created.  If you use the special server
-			refnum -1, then the log works for all servers.
+	These rules are needed to maintain as much backwards compatability
+	as much as possible for most users, who will not change anything.
 
-	Options that modify the log's state
-	-----------------------------------
-		ON
-			Turn the logfile on.
-		OFF
-			Turn the logfile off.
+*** News 02/03/2003 -- Changes to /SET NOTIFY_INTERVAL
+	There is a new #define in config.h, #define MINIMUM_NOTIFY_INTERVAL
+	which is an integer value that sets the minimum permissable value
+	of /SET NOTIFY_INTERVAL.  If you attempt to /SET to a lower value,
+	it will be change to the minimum value.  The default value is 60,
+	and you can change it in config.h if you wish.
 
-	Options that modify the log's target list
-	-----------------------------------------
-		ADD <nick|channel|refnum>[,<nick|channel|refnum>...]
-			If the log is of "TARGET" type, then add a list of 
-			one or more nicks or channels to the current target
-			list.  If the log is of "WINDOW" or "SERVER" type,
-			then add a list of one or more window or server
-			refnums to the list.
-		REMOVE <nick|channel>[,<nick|channel>...]
-			If the log is of "TARGET" type, then remove a list of 
-			one or more nicks or channels to the current target
-			list.  If the log is of "WINDOW" or "SERVER" type,
-			then remove a list of one or more window or server
-			refnums to the list.
+*** News 02/03/2003 -- Changes to /ON WINDOW_KILL
+	Previously, /ON WINDOW_KILL provided the window's "name or refnum"
+	as $0.  But if you wanted to get the refnum, you couldn't because
+	the window had already been destroyed.  So /ON WINDOW_KILL has been
+	extended so $1 is always the window's refnum:
+		$0	Window's "name or refnum"
+		$1	Window's refnum
 
-	Options that modify how the log writes to the logfile
-	-----------------------------------------------------
-		MANGLE
-			Change how stuff written to the log will be "mangled".
-			By default, the logfile will be mangled by whatever 
-			/SET MANGLE_LOGFILES is set to.
-		REWRITE
-			Change how stuff written to the log will be "rewritten".
-			By default, the logfile is rewritten by whatever 
-			/SET LOG_REWRITE is set to.
+*** News 01/30/2003 -- $serverctl() general cleanup.
+	subcommands will be matched against as many characters as are
+	supplied.  This means that $serverctl(get 4 007) will not call the
+	005 subcommand for eg, but also that in ambiguous cases, the first
+	matching subcommand is used where they may not have been before.
 
-	Other options
-	-------------
-		KILL
-			Irreversably destroy a logfile.  Once you kill a 
-			logfile, you cannot operate on it again.
-		DESCRIBE
-			Give detailed information about the current state
-			of the logfile.
-		LIST
-			Give brief information about all logfiles.
+*** News 01/30/2003 -- $serverctl(?match *pattern*) does wildcard matching.
+	gmatch will return all servers matching group *pattern*.
+	imatch will return all servers matching (its) server name *pattern*.
+	omatch will return all servers matching (our) server name *pattern*.
+	match was never implemented and has been removed.
+	pmatch was never implemented and has been removed.
 
+*** News 01/30/2003 -- $serverctl(max)
+	$serverctl(max) now returns the number of _slots_ in the server
+	list.  Note that this currently equates to the largest number
+	of servers in the list at any one time.  It doesn't shrink if
+	you delete servers.
 
-	Examples:
-	---------
-	If you wanted to log #epic, you could do something like this:
-		/LOG NEW NAME epic-log FILENAME ~/logs/#epic ADD #epic ON
-	Then if you wanted to close that log later you could do
-		/LOG REFNUM epic-log OFF
-	or
-		/LOG REFNUM epic-log KILL
+*** News 01/30/2003 -- $afterw(), $beforew(), $fromw(), $tow()..
+	WARNING:  Incompatible change.  If you experience problems
+	because of this change, you should notify #epic on efnet.
 
-	If you wanted to log anything that went to windows 2 or 3:
-		/LOG NEW NAME mywinlog FILENAME ~/logs/win23 TYPE windows
-		/LOG REFNUM mywinlog ADD 2,3 ON
+	These functions will now do fixed string matching rather than
+	pattern matching.  I figure that the old method of implementing
+	these functions is fundamentally flawed, and not useful for real
+	world applications.  Examination of many publicly available
+	scripts seems to indicate that these functions are avoided and
+	that where they are used, they constitute latent bugs since text
+	matching is desired.
 
-	If you wanted to log anything that happened on server 2:
-		/LOG NEW NAME servlog FILENAME ~/logs/serv2 TYPE servers
-		/LOG REFNUM servlog ADD 2 ON
+*** News 01/30/2003 -- $writeb() dequotes data.
+	This makes it capable of writing binary data.
+	$writeb($writefd $read($readfd $numbytes)) will copy $numbytes
+	of binary data from one FD to the other faithfully.
+
+*** News 01/30/2003 -- Subsecond /sleep.
+	/sleep now accepts floating point arguments.  This makes it much
+	the same as /usleep which accepts integer microsecond values,
+	but not entirely.
+
+*** News 12/23/2002 -- /exec options tuned.
+	-line, -linepart, -error and -errorpart can now be changed for a
+	process on the fly, using %process like the other options.
+
+	Using the -window option will now nail the process to the server
+	too.
+
+*** News 12/23/2002 -- $xdebug() now accepts masks.
+
+*** News 12/23/2002 -- /redir tuned
+	/redir now permits raw dccs to be used.  Also, when used outside
+	of the command line script, the $* arguments will now be available.
+
+*** News 12/23/2002 -- New /set, /set FLOATING_POINT_PRECISION
+	This sets the number of decimal places of the results of floating
+	point math.  Note that this makes FLOATING_POINT_MATH redundant.
 
 # End of file

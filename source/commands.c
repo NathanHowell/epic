@@ -1,4 +1,4 @@
-/* $EPIC: commands.c,v 1.44.2.1 2003/02/27 12:17:24 wd Exp $ */
+/* $EPIC: commands.c,v 1.44.2.2 2003/02/27 15:29:55 wd Exp $ */
 /*
  * commands.c -- Stuff needed to execute commands in ircII.
  *		 Includes the bulk of the built in commands for ircII.
@@ -50,7 +50,6 @@
 #include "commands.h"
 #include "exec.h"
 #include "files.h"
-#include "funny.h"
 #include "help.h"
 #include "history.h"
 #include "hook.h"
@@ -109,18 +108,6 @@
 	int	break_exception = 0;
 	int	continue_exception = 0;
 	int	return_exception = 0;
-
-typedef	struct	WaitCmdstru
-{
-	char	*stuff;
-	struct	WaitCmdstru	*next;
-}	WaitCmd;
-
-static	WaitCmd	*start_wait_list = NULL,
-		*end_wait_list = NULL;
-
-	char	lame_wait_nick[] = "***LW***";
-	char	wait_nick[] = "***W***";
 
 /* commands and whatnot */
 static  void    abortcmd 	(const char *, char *, const char *);
@@ -432,7 +419,7 @@ BUILT_IN_COMMAND(away)
 
 	if (flag == AWAY_ALL)
 	{
-		for (i = 0; i < number_of_servers; i++)
+		for (i = 0; i < server_list_size(); i++)
 			set_server_away(i, args);
 	}
 	else
@@ -513,6 +500,8 @@ BUILT_IN_COMMAND(e_clear)
 		else
 			unclear_window_by_refnum(0, unhold);
 	}
+
+	update_all_windows();
 }
 
 /* comment: does the /COMMENT command, useful in .ircrc */
@@ -689,13 +678,13 @@ BUILT_IN_COMMAND(e_nick)
 		return;
 	}
 
-	if (from_server == -1)
+	if (from_server == NOSERV)
 	{
 		say("You may not change nicknames when not connected to a server");
 		return;
 	}
 
-	nick_command_is_pending(from_server, 1);
+	set_server_nickname_pending(from_server, 1);
 	change_server_nickname(from_server, nick);
 }
 
@@ -720,7 +709,7 @@ BUILT_IN_COMMAND(e_pause)
 {
 	char *	sec;
 	double 	seconds;
-	struct timeval 	start;
+	Timeval	start;
 
 	if (!(sec = next_arg(args, &args)))
 	{
@@ -742,7 +731,7 @@ BUILT_IN_COMMAND(e_pause)
 	 * I use comment here simply becuase its not going to mess
 	 * with the arguments.
 	 */
-	add_timer(0, "", seconds, 1, (int (*)(void *))comment, NULL, NULL, current_window);
+	add_timer(0, "", seconds, 1, (int (*)(void *))comment, NULL, NULL, current_window->refnum);
 	while (time_diff(get_time(NULL), start) > 0)
 		io("e_pause");
 }
@@ -759,7 +748,7 @@ BUILT_IN_COMMAND(e_privmsg)
 	{
 		if (!strcmp(nick, "."))
 		{
-			if (!(nick = get_server_sent_nick()))
+			if (!(nick = get_server_sent_nick(from_server)))
 			{
 				say("You have not sent a message to anyone yet.");
 				return;
@@ -767,7 +756,7 @@ BUILT_IN_COMMAND(e_privmsg)
 		}
 		else if (!strcmp(nick, ",")) 
 		{
-			if (!(nick = get_server_recv_nick()))
+			if (!(nick = get_server_recv_nick(from_server)))
 			{
 				say("You have not received a message from anyone yet.");
 				return;
@@ -776,7 +765,7 @@ BUILT_IN_COMMAND(e_privmsg)
 		else if (!strcmp(nick, "*") && (!(nick = get_channel_by_refnum(0))))
 			nick = zero;
 		send_text(nick, args, command, window_display);
-		set_server_sent_body(args);
+		set_server_sent_body(from_server, args);
 	}
 	else 
 	{
@@ -872,7 +861,7 @@ BUILT_IN_COMMAND(xechocmd)
 	int	temp;
 	Window *old_to_window;
 	int	all_windows = 0;
-	int	banner = 0;
+	int	want_banner = 0;
 	char	*stuff = NULL;
 	int	nolog = 0;
 	int	more = 1;
@@ -978,7 +967,7 @@ BUILT_IN_COMMAND(xechocmd)
 		case 'B':	/* WITH BANNER */
 		{
 			next_arg(args, &args);
-			banner = 1;
+			want_banner = 1;
 			break;
 		}
 
@@ -1071,16 +1060,16 @@ BUILT_IN_COMMAND(xechocmd)
 	if (nolog)
 		inhibit_logging = 1;
 
-	if (banner == 1)
+	if (want_banner == 1)
 	{
-		malloc_strcpy(&stuff, numeric_banner());
+		malloc_strcpy(&stuff, banner());
 		if (*stuff)
 		{
 			m_3cat(&stuff, space, args);
 			args = stuff;
 		}
 	}
-	else if (banner != 0)
+	else if (want_banner != 0)
 		abort();
 
 	if (all_windows == 1)
@@ -1138,8 +1127,8 @@ BUILT_IN_COMMAND(xevalcmd)
 		flag = next_arg(args, &args);
 		if (!my_strnicmp(flag + 1, "S", 1)) /* SERVER */
 		{
-			int val = my_atol(next_arg(args, &args));
-			if (is_server_connected(val))
+			int val = parse_server_index(next_arg(args, &args), 1);
+			if (is_server_registered(val))
 				from_server = val;
 		}
 		else if (!my_strnicmp(flag + 1, "W", 1)) /* WINDOW */
@@ -1218,8 +1207,6 @@ BUILT_IN_COMMAND(funny_stuff)
 			}
 			else if (my_strnicmp(arg+1, "T", 1) == 0)	/* TOPIC */
 				flags |= FUNNY_TOPIC;
-			else if (my_strnicmp(arg+1, "W", 1) == 0)	/* WIDE */
-				flags |= FUNNY_WIDE;
 			else if (my_strnicmp(arg+1, "U", 1) == 0)	/* USERS */
 				flags |= FUNNY_USERS;
 			else if (my_strnicmp(arg+1, "N", 1) == 0)	/* NAME */
@@ -1230,7 +1217,6 @@ BUILT_IN_COMMAND(funny_stuff)
 		else stuff = arg;
 	}
 
-	set_funny_flags(min, max, flags);
 	if (strcmp(stuff, "*") == 0)
 		if (!(stuff = get_channel_by_refnum(0)))
 			stuff = empty_string;
@@ -1238,7 +1224,8 @@ BUILT_IN_COMMAND(funny_stuff)
 	/* Channel names can contain stars! */
 	if (strchr(stuff, '*') && !im_on_channel(stuff, from_server))
 	{
-		funny_match(stuff);
+		set_server_funny_stuff(from_server, min, max, flags, stuff);
+
 		if (min && ircu)
 		{
 			if (max)
@@ -1253,7 +1240,8 @@ BUILT_IN_COMMAND(funny_stuff)
 	}
 	else
 	{
-		funny_match(NULL);
+		set_server_funny_stuff(from_server, min, max, flags, NULL);
+
 		if (min && ircu)
 		{
 			if (max)
@@ -1992,7 +1980,7 @@ BUILT_IN_COMMAND(oper)
 /* pingcmd: ctcp ping, duh - phone, jan 1993. */
 BUILT_IN_COMMAND(pingcmd)
 {
-	struct timeval t;
+	Timeval t;
 	char buffer[64];
 
 	get_time(&t);
@@ -2010,10 +1998,8 @@ BUILT_IN_COMMAND(pop_cmd)
 BUILT_IN_COMMAND(pretend_cmd)
 {
 	int	s = from_server;
-	char	buffer[IO_BUFFER_SIZE + 1];
 
-	strlcpy(buffer, args, IRCD_BUFFER_SIZE);	/* Sanity Check */
-	parse_server(buffer);
+	parse_server(args);
 	from_server = s;
 }
 
@@ -2040,54 +2026,54 @@ BUILT_IN_COMMAND(query)
  */
 BUILT_IN_COMMAND(quotecmd)
 {
-	int	old_from_server = from_server;
+	int	refnum = from_server;
 	int	urlencoded = 0;
 	size_t	length;
 
 	if (*command == 'X')
 	{
-		while (args && (*args == '-' || *args == '/'))
+	    while (args && (*args == '-' || *args == '/'))
+	    {
+		char *flag = next_arg(args, &args);
+
+		if (!my_strnicmp(flag + 1, "S", 1)) /* SERVER */
 		{
-			char *flag = next_arg(args, &args);
-			if (!my_strnicmp(flag + 1, "S", 1)) /* SERVER */
+			int sval;
+
+			sval = parse_server_index(next_arg(args, &args), 1);
+			if (!is_server_open(sval))
 			{
-				int sval = my_atol(next_arg(args, &args));
-				if (is_server_connected(sval))
-					from_server = sval;
+			   say("XQUOTE: Server %d is not connected", sval);
+			   return;
 			}
-			else if (!my_strnicmp(flag + 1, "U", 1)) /* URL quoting */
-			{
-				urlencoded++;
-			}
-			else if (!my_strnicmp(flag + 1, "A", 1)) /* ALL */
-			{
-				int	i;
-				if (args && *args)
-				{
-					for (i = 0; i < number_of_servers; i++)
-					{
-						if (is_server_connected(i))
-						{
-						    from_server = i;
-						    send_to_server("%s", args);
-						}
-					}
-				}
-				goto end;
-			}
-			else
-			{
-				/* End option processing on unknown arg. */
-				break;
-			}
+			refnum = sval;
 		}
+		else if (!my_strnicmp(flag + 1, "U", 1)) /* URL quoting */
+			urlencoded++;
+		else if (!my_strnicmp(flag + 1, "A", 1)) /* ALL */
+		{
+			int	i;
+
+			if (args && *args)
+			{
+				for (i = 0; i < server_list_size(); i++)
+				{
+					if (is_server_registered(i))
+					    send_to_aserver(i, "%s", args);
+				}
+			}
+			return;
+		}
+		else		/* End option processing on unknown arg. */
+			break;
+	    }
 	}
 
 	if (urlencoded)
 	{
 		length = strlen(args);
 		urldecode(args, &length);
-		send_to_server_raw(length, args);
+		send_to_aserver_raw(refnum, length, args);
 	}
 	else if (args && *args)
 	{
@@ -2108,7 +2094,7 @@ BUILT_IN_COMMAND(quotecmd)
 		if (cnt < 0 && (rfc1459[loc].flags & PROTO_NOQUOTE))
 		{
 			yell("Doing /QUOTE %s is not permitted.  Use the client's built in command instead.", comm);
-			goto end;
+			return;
 		}
 
 		/*
@@ -2118,11 +2104,8 @@ BUILT_IN_COMMAND(quotecmd)
 		if (cnt < 0 && (rfc1459[loc].flags & PROTO_DEPREC))
 			yell("Doing /QUOTE %s is discouraged because it will destablize the client.  Use the client's built in command instead.", comm);
 
-		send_to_server("%s %s", comm, args);
+		send_to_aserver(refnum, "%s %s", comm, args);
 	}
-
-end:
-	from_server = old_from_server;
 }
 
 /* This code is courtesy of Richie B. (richie@morra.et.tudelft.nl) */
@@ -2149,7 +2132,7 @@ BUILT_IN_COMMAND(realname_cmd)
  */
 BUILT_IN_COMMAND(reconnect_cmd)
 {
-	if (from_server == -1)
+	if (from_server == NOSERV)
 	{
 		say("Reconnect to what server? (You're not connected)");
 		return;
@@ -2170,11 +2153,11 @@ BUILT_IN_COMMAND(redirect)
 
 	if ((who = next_arg(args, &args)) == NULL)
 	{
-		say("%s", "Usage: /REDIRECT <nick|channel|%process> <cmd>");
+		say("%s", "Usage: /REDIRECT <nick|channel|=dcc|%process|/command|@filedescriptor|\"|0> <cmd>");
 		return;
 	}
 
-	if (from_server == -1)
+	if (from_server == NOSERV)
 	{
 		say("You may not use /REDIRECT here.");
 		return;
@@ -2197,7 +2180,7 @@ BUILT_IN_COMMAND(redirect)
 	 * redirecting to a dcc chat sessions that isn't active or 
 	 * doesn't exist.
 	 */
-	if ((*who == '=') && !dcc_chat_active(who + 1)) 
+	if ((*who == '=') && !is_number(who + 1) && !dcc_chat_active(who + 1)) 
 	{
 		say("You don't have an active DCC CHAT to %s",who + 1);
 		return;
@@ -2207,14 +2190,14 @@ BUILT_IN_COMMAND(redirect)
 	 * Turn on redirect, and do the thing.
 	 */
 	set_server_redirect(from_server, who);
-	clear_sent_to_server(from_server);
-	parse_line(NULL, args, NULL, 0, 0);
+	set_server_sent(from_server, 0);
+	parse_line(NULL, args, subargs ? subargs : NULL, 0, 0);
 
 	/*
 	 * If we've queried the server, then we wait for it to
 	 * reply, otherwise we're done.
 	 */
-	if (sent_to_server(from_server))
+	if (get_server_sent(from_server))
 		send_to_server("***%s", who);
 	else
 		set_server_redirect(from_server, NULL);
@@ -2470,9 +2453,17 @@ BUILT_IN_COMMAND(shift_cmd)
 BUILT_IN_COMMAND(sleepcmd)
 {
 	char	*arg;
+	Timeval	pause;
+	float	nms;
+	time_t	sec;
 
 	if ((arg = next_arg(args, &args)) != NULL)
-		sleep(my_atol(arg));
+	{
+		nms = atof(arg);
+		pause.tv_sec = sec = (int)nms;
+		pause.tv_usec = (nms-sec) * 1000000;
+		select(0, NULL, NULL, NULL, &pause);
+	}
 	else
 		say("Usage: SLEEP <seconds>");
 }
@@ -2540,9 +2531,9 @@ BUILT_IN_COMMAND(unshift_cmd)
 
 BUILT_IN_COMMAND(usleepcmd)
 {
-	char 		*arg;
-	struct timeval 	pause;
-	time_t		nms;
+	char *	arg;
+	Timeval	pause;
+	time_t	nms;
 
 	if ((arg = next_arg(args, &args)))
 	{
@@ -2579,13 +2570,13 @@ BUILT_IN_COMMAND(waitcmd)
 
 	else if (ctl_arg && !my_strnicmp(ctl_arg, "for", 3))
 	{
-		clear_sent_to_server(from_server);
+		set_server_sent(from_server, 0);
 		lock_stack_frame();
 		parse_line(NULL, args, subargs, 0, 0);
 		unlock_stack_frame();
-		if (sent_to_server(from_server))
+		if (get_server_sent(from_server))
 			server_hard_wait(from_server);
-		clear_sent_to_server(from_server);	/* reset it again */
+		set_server_sent(from_server, 0);	/* Reset it again */
 	}
 
 	else if (ctl_arg && *ctl_arg == '%')
@@ -2614,7 +2605,7 @@ BUILT_IN_COMMAND(waitcmd)
 	else
 	{
 		server_hard_wait(from_server);
-		clear_sent_to_server(from_server);
+		set_server_sent(from_server, 0);
 	}
 }
 
@@ -2868,6 +2859,9 @@ struct target_type target[4] =
 	     */
 	    else if (*current_nick == '@' && is_number(current_nick + 1))
 		target_file_write(current_nick + 1, text);
+	    else if (*current_nick == '@' && toupper(current_nick[1]) == 'W' 
+			&& is_number(current_nick + 1))
+		target_file_write(current_nick + 1, text);
 
 	    else if (*current_nick == '"')
 		send_to_server("%s", text);
@@ -2897,24 +2891,24 @@ struct target_type target[4] =
 			line = m_strdup(text);
 
 		old_server = from_server;
-		from_server = -1;
+		from_server = NOSERV;
 		dcc_chat_transmit(current_nick + 1, line, text, command, hook);
 		from_server = old_server;
-		set_server_sent_nick(current_nick);
+		set_server_sent_nick(from_server, current_nick);
 		new_free(&line);
 	    }
 	    else
 	    {
 		char *	copy = NULL;
 
-		if (doing_notice())
+		if (get_server_doing_notice(from_server))
 		{
 			say("You cannot send a message from within ON NOTICE");
 			continue;
 		}
 
 		i = is_channel(current_nick);
-		if (doing_privmsg() || (command && !strcmp(command, "NOTICE")))
+		if (get_server_doing_privmsg(from_server) || (command && !strcmp(command, "NOTICE")))
 			i += 2;
 
 		if ((key = is_crypted(current_nick)))
@@ -2930,7 +2924,7 @@ struct target_type target[4] =
 
 			send_to_server("%s %s :%s", 
 					target[i].command, current_nick, line);
-			set_server_sent_nick(current_nick);
+			set_server_sent_nick(from_server, current_nick);
 
 			new_free(&line);
 			set_lastlog_msg_level(lastlog_level);
@@ -2939,7 +2933,7 @@ struct target_type target[4] =
 		else
 		{
 			if (i == 0)
-				set_server_sent_nick(current_nick);
+				set_server_sent_nick(from_server, current_nick);
 			if (target[i].nick_list)
 				malloc_strcat(&target[i].nick_list, ",");
 			malloc_strcat(&target[i].nick_list, current_nick);
@@ -3069,7 +3063,6 @@ void 	command_completion (char unused, char *not_used)
 				set_input(buffer);
 				new_free((char **)aliases);
 				new_free((char **)&aliases);
-				update_input(UPDATE_ALL);
 			}
 			else if (((cmd_cnt == 1) && (alias_cnt == 0)) ||
 			    ((cmd_cnt == 1) && (alias_cnt == 1) &&
@@ -3079,7 +3072,6 @@ void 	command_completion (char unused, char *not_used)
 					do_aliases ? empty_string : firstcmdchar,
 					command->name, rest);
 				set_input(buffer);
-				update_input(UPDATE_ALL);
 			}
 			else
 			{
@@ -3551,10 +3543,7 @@ static	unsigned 	level = 0;
 				if ((cline = do_history(cline + 1, rest)) != NULL)
 				{
 					if (level == 1)
-					{
 						set_input(cline);
-						update_input(UPDATE_ALL);
-					}
 					else
 						parse_command(cline, 0, sub_args);
 

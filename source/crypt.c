@@ -1,4 +1,4 @@
-/* $EPIC: crypt.c,v 1.8 2002/07/17 22:52:52 jnelson Exp $ */
+/* $EPIC: crypt.c,v 1.8.2.1 2003/02/27 15:29:55 wd Exp $ */
 /*
  * crypt.c: handles some encryption of messages stuff. 
  *
@@ -100,7 +100,7 @@ static	int	remove_crypt (char *nick)
  * is_crypted: looks up nick in the crypt_list and returns the encryption key
  * if found in the list.  If not found in the crypt_list, null is returned. 
  */
-Crypt	*is_crypted (char *nick)
+Crypt	*is_crypted (const char *nick)
 {
 	Crypt	*tmp;
 
@@ -235,11 +235,11 @@ static 	char *do_crypt (char *str, Crypt *key, int flag)
 			free = str = (char*)prog_crypt(str, &c, key, flag);
 		else
 			my_encrypt(str, c, key->key);
-		str = ctcp_quote_it(str, c);
+		str = enquote_it(str, c);
 	}
 	else
 	{
-		str = ctcp_unquote_it(str, &c);
+		str = dequote_it(str, &c);
 		if (key->prog)
 			str = (char*)prog_crypt(free = str, &c, key, flag);
 		else

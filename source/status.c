@@ -1,4 +1,4 @@
-/* $EPIC: status.c,v 1.13 2002/09/26 22:41:43 jnelson Exp $ */
+/* $EPIC: status.c,v 1.13.2.1 2003/02/27 15:29:57 wd Exp $ */
 /*
  * status.c: handles the status line updating, etc for IRCII 
  *
@@ -52,9 +52,6 @@
 #include "names.h"
 #include "ircaux.h"
 #include "alias.h"
-#ifdef HAVE_SSL
-#include "ssl.h"
-#endif
 
 #ifdef Char
 #undef Char
@@ -84,6 +81,7 @@ STATUS_FUNCTION(status_away);
 STATUS_FUNCTION(status_oper);
 STATUS_FUNCTION(status_user);
 STATUS_FUNCTION(status_dcc);
+STATUS_FUNCTION(status_dcc_all);
 STATUS_FUNCTION(status_hold);
 STATUS_FUNCTION(status_version);
 STATUS_FUNCTION(status_clock);
@@ -91,6 +89,7 @@ STATUS_FUNCTION(status_hold_lines);
 STATUS_FUNCTION(status_window);
 STATUS_FUNCTION(status_mail);
 STATUS_FUNCTION(status_refnum);
+STATUS_FUNCTION(status_refnum_real);
 STATUS_FUNCTION(status_null_function);
 STATUS_FUNCTION(status_notify_windows);
 STATUS_FUNCTION(status_voice);
@@ -191,8 +190,10 @@ struct status_formats status_expandos[] = {
 { 1, '7', status_user,		NULL, 			-1 },
 { 1, '8', status_user,		NULL, 			-1 },
 { 1, '9', status_user,		NULL, 			-1 },
+{ 1, 'D', status_dcc_all,	NULL, 			-1 },
 { 1, 'F', status_notify_windows,&notify_format,		STATUS_NOTIFY_VAR },
 { 1, 'K', status_scroll_info,	NULL,			-1 },
+{ 1, 'R', status_refnum_real,   NULL, 			-1 },
 { 1, 'S', status_server,        &server_format,     	STATUS_SERVER_VAR },
 { 1, 'T', status_test,		NULL,			-1 },
 { 2, '0', status_user,	 	NULL, 			-1 },
@@ -489,7 +490,7 @@ int     permit_status_update (int flag)
  * but the crecendo of complaints with regards to this just got to be too 
  * irritating, so i fixed it early.
  */
-void	make_status (Window *window, int must_redraw)
+int	make_status (Window *window, int must_redraw)
 {
 	int	status_line;
 	u_char	buffer	    [BIG_BUFFER_SIZE + 1];
@@ -500,7 +501,7 @@ void	make_status (Window *window, int must_redraw)
 
 	/* We do NOT redraw status bars for hidden windows */
 	if (!window->screen || !status_updates_permitted)
-		return;
+		return -1;
 
 	for (status_line = 0; status_line < window->status.double_status + 1; status_line++)
 	{
@@ -605,10 +606,13 @@ void	make_status (Window *window, int must_redraw)
 		if (get_int_var(STATUS_DOES_EXPANDOS_VAR))
 		{
 			int  af = 0;
+			int  old_fs = from_server;
 			Window *old = current_window;
 
 			current_window = window;
+			from_server = current_window->server;
 			str = expand_alias(buffer, empty_string, &af, NULL);
+			from_server = old_fs;
 			current_window = old;
 			strmcpy(buffer, str, BIG_BUFFER_SIZE);
 			new_free(&str);
@@ -775,6 +779,7 @@ void	make_status (Window *window, int must_redraw)
 	}
 
 	cursor_to_input();
+	return 0;
 }
 
 
@@ -843,7 +848,7 @@ static	char	my_buffer[64];
 	/*
 	 * If this window isnt connected to a server, say so.
 	 */
-	if (window->server == -1)
+	if (window->server == NOSERV)
 		return "No Server";
 
 	/*
@@ -1007,7 +1012,7 @@ STATUS_FUNCTION(status_mode)
 static  char    my_buffer[81];
 
 	*my_buffer = 0;
-	if (window->current_channel && window->server != -1)
+	if (window->current_channel && window->server != NOSERV)
 	{
                 mode = get_channel_mode(window->current_channel,window->server);
 		if (mode && *mode && mode_format)
@@ -1068,7 +1073,7 @@ STATUS_FUNCTION(status_chanop)
 {
 	char	*text;
 
-	if (!window->current_channel && window->server == -1)
+	if (!window->current_channel || window->server == NOSERV)
 		return empty_string;
 	
 	if (get_channel_oper(window->current_channel, window->server) &&
@@ -1087,15 +1092,13 @@ STATUS_FUNCTION(status_chanop)
  */
 STATUS_FUNCTION(status_ssl)
 {
-#ifdef HAVE_SSL
 	char *text;
 
-	if (window->server != -1 && get_server_isssl(window->server) &&
+	if (window->server != NOSERV && get_server_isssl(window->server) &&
 		(text = get_string_var(STATUS_SSL_ON_VAR)))
 			return text;
 	else if ((text = get_string_var(STATUS_SSL_OFF_VAR)))
 			return text;
-#endif
 	return empty_string;
 }
 
@@ -1131,7 +1134,7 @@ STATUS_FUNCTION(status_channel)
 static	char	my_buffer[IRCD_BUFFER_SIZE + 1];
 	int	num;
 
-	if (!window->current_channel || window->server == -1 || !channel_format)
+	if (!window->current_channel || window->server == NOSERV || !channel_format)
 		return empty_string;
 
 	if (get_int_var(HIDE_PRIVATE_CHANNELS_VAR) && 
@@ -1158,7 +1161,7 @@ STATUS_FUNCTION(status_voice)
 {
 	char *text;
 
-	if (window->current_channel && window->server != -1 &&
+	if (window->current_channel && window->server != NOSERV &&
 	    get_channel_voice(window->current_channel, window->server) &&
 	    !get_channel_oper(window->current_channel, window->server) &&
 	    (text = get_string_var(STATUS_VOICE_VAR)))
@@ -1234,7 +1237,7 @@ STATUS_FUNCTION(status_away)
 	if (connected_to_server == 1 && !DISPLAY_ON_WINDOW)
 		return empty_string;
 
-	if (window->server != -1 && 
+	if (window->server != NOSERV && 
 	    get_server_away(window->server) && 
 	    (text = get_string_var(STATUS_AWAY_VAR)))
 		return text;
@@ -1312,7 +1315,7 @@ STATUS_FUNCTION(status_oper)
 {
 	char *text;
 
-	if (window->server != -1 && get_server_operator(window->server) &&
+	if (window->server != NOSERV && get_server_operator(window->server) &&
 	    (text = get_string_var(STATUS_OPER_VAR)) &&
 	    (connected_to_server != 1 || DISPLAY_ON_WINDOW))
 		return text;
@@ -1337,6 +1340,14 @@ STATUS_FUNCTION(status_refnum)
 
 	strlcpy(my_buffer, window->name ? window->name 
 					: ltoa(window->refnum), 80);
+	return my_buffer;
+}
+
+STATUS_FUNCTION(status_refnum_real)
+{
+	static char my_buffer[81];
+
+	strlcpy(my_buffer, ltoa(window->refnum), 80);
 	return my_buffer;
 }
 
@@ -1366,6 +1377,14 @@ STATUS_FUNCTION(status_dcc)
 		return DCC_get_current_transfer();
 
 	return empty_string;
+}
+
+/*
+ * As above, but always return the indicator.
+ */
+STATUS_FUNCTION(status_dcc_all)
+{
+	return DCC_get_current_transfer();
 }
 
 /*

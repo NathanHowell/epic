@@ -1,4 +1,4 @@
-/* $EPIC: log.c,v 1.7 2002/10/18 21:10:23 jnelson Exp $ */
+/* $EPIC: log.c,v 1.7.2.1 2003/02/27 15:29:56 wd Exp $ */
 /*
  * log.c: handles the irc session logging functions 
  *
@@ -40,7 +40,6 @@
 #include "output.h"
 #include "ircaux.h"
 #include "alias.h"
-#include <sys/stat.h>
 
 	FILE	*irclog_fp;
 	int	logfile_line_mangler;
@@ -69,8 +68,10 @@ static FILE *open_log (const char *logfile, FILE **fp)
 			
 	if (normalize_filename(logfile, fullname))
 	{
+#if 0
 		say("SET LOGFILE: %s is not a valid directory", logfile);
 		return NULL;
+#endif
 	}
 
 	if ((*fp = fopen(fullname, "a")) != NULL)

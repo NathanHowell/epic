@@ -1,4 +1,4 @@
-/* $EPIC: screen.c,v 1.34 2002/09/26 22:41:43 jnelson Exp $ */
+/* $EPIC: screen.c,v 1.34.2.1 2003/02/27 15:29:56 wd Exp $ */
 /*
  * screen.c
  *
@@ -758,7 +758,7 @@ u_char *	normalize_string (const u_char *str, int logical)
 	int		nds_max, nds_cnt = 0;
 	int		pc = 0;
 	int		reverse, bold, blink, underline, altchar, color, allow_c1, boldback;
-	size_t		(*attrout) (u_char *, Attribute *);
+	size_t		(*attrout) (u_char *, Attribute *) = NULL;
 
 	/* Figure out how many beeps/tabs/nds's we can handle */
 	if (!(beep_max  = get_int_var(BEEP_MAX_VAR)))
@@ -2093,12 +2093,8 @@ void 	add_to_screen (const unsigned char *buffer)
 		return;
 	}
 
-	if (in_window_command)
-	{
-		in_window_command = 0;	/* Inhibit looping! */
-		update_all_windows();
-		in_window_command = 1;
-	}
+	/* All windows MUST be "current" before output can occur */
+	update_all_windows();
 
 	/*
 	 * The highest priority is if we have explicitly stated what
@@ -2192,7 +2188,7 @@ void 	add_to_screen (const unsigned char *buffer)
 		 * we'd better check to see if this should go to a
 		 * specific window (i dont agree with this, though)
 		 */
-		if (from_server != -1 && is_channel(who_from))
+		if (from_server != NOSERV && is_channel(who_from))
 		{
 			if ((tmp = get_channel_window(who_from, from_server)))
 			{
@@ -2221,7 +2217,7 @@ void 	add_to_screen (const unsigned char *buffer)
 		/*
 		 * Check for /WINDOW LEVELs that apply
 		 */
-		if (((from_server == tmp->server) || (from_server == -1)) &&
+		if (((from_server == tmp->server) || (from_server == NOSERV)) &&
 		    (who_level & tmp->window_level))
 		{
 			add_to_window(tmp, buffer);
@@ -2281,7 +2277,7 @@ static void 	add_to_window (Window *window, const unsigned char *str)
 	char *	pend;
 	char *	strval;
 
-	if (window->server >= 0 && get_server_redirect(window->server))
+	if (get_server_redirect(window->server))
 		if (redirect_text(window->server, 
 			        get_server_redirect(window->server),
 				str, NULL, 0))
@@ -2701,7 +2697,7 @@ Window	*create_additional_screen (void)
         ISA		new_socket;
 	int		new_cmd;
 	fd_set		fd_read;
-	struct	timeval	timeout;
+	Timeval		timeout;
 	pid_t		child;
 	unsigned short 	port;
 	int		new_sock_size;
@@ -2958,6 +2954,8 @@ void 	kill_screen (Screen *screen)
 		close(screen->fdout);
 		close(screen->fdin);
 	}
+	if (screen->control)
+		screen->control = new_close(screen->control);
 	while ((window = screen->window_list))
 	{
 		screen->window_list = window->next;
@@ -2990,7 +2988,7 @@ void 	kill_screen (Screen *screen)
 
 
 /* * * * * * * * * * * * * USER INPUT HANDLER * * * * * * * * * * * */
-void 	do_screens (fd_set *rd)
+void 	do_screens (fd_set *rd, fd_set *wd)
 {
 	Screen *screen;
 	char 	buffer[IO_BUFFER_SIZE + 1];
@@ -3007,7 +3005,7 @@ void 	do_screens (fd_set *rd)
 		{
 			FD_CLR(screen->control, rd);
 
-			if (dgets(buffer, screen->control, 1) < 0)
+			if (dgets(buffer, screen->control, 1, NULL) < 0)
 			{
 				kill_screen(screen);
 				yell("Error from remote screen [%d].", dgets_errno);
@@ -3063,10 +3061,7 @@ void 	do_screens (fd_set *rd)
 			 */
 			get_time(&idle_time);
 			if (cpu_saver)
-			{
-				cpu_saver = 0;
-				update_all_status();
-			}
+				cpu_saver_off();
 
 			server = from_server;
 			last_input_screen = screen;
@@ -3076,7 +3071,7 @@ void 	do_screens (fd_set *rd)
 
 			if (dumb_mode)
 			{
-				if (dgets(buffer, screen->fdin, 1) < 0)
+				if (dgets(buffer, screen->fdin, 1, NULL) < 0)
 				{
 					say("IRCII exiting on EOF from stdin");
 					irc_exit(1, "EPIC - EOF from stdin");
