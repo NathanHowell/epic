@@ -9,12 +9,30 @@
 #ifndef __alias_h__
 #define __alias_h__
 
+#include "bsdqueue.h"
+#include "namespace.h"
+
 /*
  * XXXX - These need to go away
  */
 #define COMMAND_ALIAS 		0
 #define VAR_ALIAS 		1
 #define VAR_ALIAS_LOCAL 	2
+
+/* This had to be sucked out of alias.c because namespaces need to know the
+ * size of the alias item structure. */
+typedef struct AliasItemStru {
+	char	*name;			/* name of alias */
+	namespace_t *nspace;		/* namespace we live in */
+	char	*stuff;			/* what the alias is */
+	char	*stub;			/* the file its stubbed to */
+	char	*filename;		/* file it was loaded from */
+	int	line;			/* line it was loaded from */
+	int	global;			/* set if loaded from * `global' */
+	struct ArgListT *arglist;	/* List of * arguments to * alias */
+	LIST_ENTRY(AliasItemStru) lp;
+}	Alias;
+
 
 /*
  * These are the user commands.  Dont call these directly.
@@ -26,13 +44,12 @@
 	BUILT_IN_COMMAND(dumpcmd);
 	BUILT_IN_COMMAND(unloadcmd);
 
-	void 	add_var_alias      	(char *name, char *stuff, int noisy);
-	void 	add_local_alias    	(char *name, char *stuff, int noisy);
+	void 	add_variable      	(char *name, char *stuff, int noisy,
+					 int stub);
+	void 	add_local_var    	(char *name, char *stuff, int noisy);
 #if 0	/* Internal now */
 	void 	add_cmd_alias 	   	(void);
 #endif
-	void 	add_var_stub_alias 	(char *name, char *stuff);
-	void 	add_cmd_stub_alias 	(char *name, char *stuff);
 
 	char *	get_variable		(char *name);
 	char **	glob_cmd_alias		(char *name, int *howmany);

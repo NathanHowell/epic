@@ -1,4 +1,4 @@
-/* $EPIC: if.c,v 1.14 2002/08/26 17:20:14 crazyed Exp $ */
+/* $EPIC: if.c,v 1.14.2.1 2003/02/27 12:17:24 wd Exp $ */
 /*
  * if.c: the IF, WHILE, FOREACH, DO, FE, FEC, and FOR commands for IRCII 
  *
@@ -377,7 +377,7 @@ BUILT_IN_COMMAND(foreach)
 	will_catch_continue_exceptions++;
 	for (i = 0; i < total; i++)
 	{
-		add_local_alias(var, sublist[i] + slen + 1, 0);
+		add_local_var(var, sublist[i] + slen + 1, 0);
 		new_free(&sublist[i]);
 
 		parse_line(NULL, body, subargs ? subargs : empty_string, 0, 0);
@@ -508,7 +508,7 @@ BUILT_IN_COMMAND(fe)
 			if (!word)
 				word = empty_string;
 
-			add_local_alias(var[y], word, 0);
+			add_local_var(var[y], word, 0);
 		}
 		x += ind;
 		parse_line((char *) 0, todo, 
@@ -537,7 +537,7 @@ BUILT_IN_COMMAND(fe)
 	will_catch_break_exceptions--;
 	will_catch_continue_exceptions--;
 
-	add_var_alias(mapvar, map, 0);
+	add_variable(mapvar, map, 0, 0);
 	new_free(&map);
 
 	window_display = 0;
@@ -580,7 +580,7 @@ void	for_next_cmd (int argc, char **argv, const char *subargs)
 	for (i = start; step > 0 ? i <= end : i >= end; i += step)
 	{
 		snprintf(istr, 255, "%d", i);
-		add_local_alias(var, istr, 0);
+		add_local_var(var, istr, 0);
 		parse_line(NULL, cmds, subargs, 0, 0);
 
 		if (break_exception)
@@ -622,7 +622,7 @@ void	for_fe_cmd (int argc, char **argv, const char *subargs)
 	while (real_list && *real_list)
 	{
 		next = new_next_arg(real_list, &real_list);
-		add_local_alias(var, next, 0);
+		add_local_var(var, next, 0);
 		parse_line(NULL, cmds, subargs, 0, 0);
 
 		if (break_exception) {

@@ -11,13 +11,14 @@ LDFLAGS	= @LDFLAGS@
 DEFS	= @DEFS@
 RM	= rm -f
 
-OBJECTS = alias.o alist.o array.o commands.o compat.o crypt.o ctcp.o \
-	dcc.o debug.o exec.o files.o flood.o functions.o funny.o gailib.o glob.o \
-	help.o history.o hook.o if.o ignore.o input.o irc.o ircaux.o \
-	ircsig.o keys.o lastlog.o list.o log.o logfiles.o mail.o names.o network.o \
-	newio.o notice.o notify.o numbers.o output.o parse.o queue.o reg.o \
-	screen.o server.o ssl.o status.o term.o timer.o translat.o vars.o who.o \
-	window.o words.o @PERLDOTOH@ @ALLOCA@
+OBJECTS = alias.o alist.o array.o commands.o compat.o crypt.o ctcp.o	\
+	dcc.o debug.o exec.o files.o flood.o functions.o funny.o	\
+	gailib.o glob.o hash.o help.o history.o hook.o if.o ignore.o	\
+	input.o irc.o ircaux.o ircsig.o keys.o lastlog.o list.o log.o	\
+	logfiles.o mail.o names.o namespace.o network.o newio.o		\
+	notice.o notify.o numbers.o output.o parse.o queue.o reg.o	\
+	screen.o server.o ssl.o status.o term.o timer.o translat.o	\
+	vars.o who.o window.o words.o @PERLDOTOH@ @ALLOCA@
 
 INCLUDES = -I@srcdir@/../include -I../include
 

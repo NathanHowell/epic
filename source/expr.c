@@ -1,4 +1,4 @@
-/* $EPIC: expr.c,v 1.9 2002/10/28 23:45:39 jnelson Exp $ */
+/* $EPIC: expr.c,v 1.9.2.1 2003/02/27 12:17:24 wd Exp $ */
 /*
  * expr.c -- The expression mode parser and the textual mode parser
  * #included by alias.c -- DO NOT DELETE
@@ -202,7 +202,7 @@ static	char	*next_unit (char *str, const char *args, int *arg_flag, int stage)
 	{								\
 		/* Make sure theres an lvalue */			\
 		if (*varname)						\
-			add_var_alias(varname, tmp, 0);			\
+			add_variable(varname, tmp, 0, 0);		\
 		else							\
 			yell("Invalid assignment: No lvalue");		\
 	}								\
@@ -431,7 +431,7 @@ static	char	*next_unit (char *str, const char *args, int *arg_flag, int stage)
 			/* Taken more or less from call_user_function */
 			make_local_stack(NULL);
 			window_display = 0;
-			add_local_alias("FUNCTION_RETURN", empty_string, 0);
+			add_local_var("FUNCTION_RETURN", empty_string, 0);
 			window_display = display;
 
 			will_catch_return_exceptions++;
@@ -655,7 +655,7 @@ static	char	*next_unit (char *str, const char *args, int *arg_flag, int stage)
 				else
 					r--;
 
-				add_var_alias(varname, ltoa(r), 0);
+				add_variable(varname, ltoa(r), 0, 0);
 
 				if (!prefix)
 					r--;
@@ -1023,7 +1023,7 @@ static	char	*next_unit (char *str, const char *args, int *arg_flag, int stage)
 				upper(varname);
 
 				if (*varname)
-					add_var_alias(varname, result2, 0);
+					add_variable(varname, result2, 0, 0);
 				else
 					yell("Invalid assignment: no lvalue");
 

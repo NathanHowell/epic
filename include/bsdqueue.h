@@ -265,7 +265,7 @@ struct {								\
 	(STAILQ_EMPTY(head) ?						\
 		NULL :							\
 	        ((struct type *)					\
-		((char *)((head)->stqh_last) - __offsetof(struct type, field))))
+		((char *)((head)->stqh_last) - offsetof(struct type, field))))
 
 #undef STAILQ_NEXT
 #define	STAILQ_NEXT(elm, field)	((elm)->field.stqe_next)

@@ -1,4 +1,4 @@
-/* $EPIC: expr2.c,v 1.4 2002/11/07 05:48:37 jnelson Exp $ */
+/* $EPIC: expr2.c,v 1.4.2.1 2003/02/27 12:17:24 wd Exp $ */
 /*
  * Zsh: math.c,v 3.1.2.1 1997/06/01 06:13:15 hzoli Exp 
  * math.c - mathematical expression evaluation
@@ -1124,7 +1124,7 @@ static void	op (expr_info *cx, int what)
 									\
 		w = tokenize_integer(cx, (intop));			\
 		t = get_token_expanded(cx, w);				\
-		add_var_alias(s, t, 0);					\
+		add_variable(s, t, 0, 0);				\
 		push_token(cx, w);					\
 		break; 							\
 	}
@@ -1143,7 +1143,7 @@ static void	op (expr_info *cx, int what)
 									\
 		w = tokenize_float(cx, (floatop));			\
 		t = get_token_expanded(cx, w);				\
-		add_var_alias(s, t, 0);					\
+		add_variable(s, t, 0, 0);				\
 		push_token(cx, w);					\
 		break; 							\
 	}
@@ -1162,7 +1162,7 @@ static void	op (expr_info *cx, int what)
 									\
 		w = tokenize_bool(cx, (boolop));			\
 		t = get_token_expanded(cx, w);				\
-		add_var_alias(s, t, 0);					\
+		add_variable(s, t, 0, 0);				\
 		push_token(cx, w);					\
 		break; 							\
 	}
@@ -1185,7 +1185,7 @@ static void	op (expr_info *cx, int what)
 				yell("O: %s = %s (%f %f) -> 0",  	\
 					s, #floatop, a, b); 		\
 			error("Division by zero"); 			\
-			add_var_alias(s, empty_string, 0);		\
+			add_variable(s, empty_string, 0, 0);		\
 			push_token(cx, 0);				\
 			break;						\
 		} 							\
@@ -1196,7 +1196,7 @@ static void	op (expr_info *cx, int what)
 									\
 		w = tokenize_float(cx, (floatop));			\
 		t = get_token_expanded(cx, w);				\
-		add_var_alias(s, t, 0);					\
+		add_variable(s, t, 0, 0);				\
 		push_token(cx, w);					\
 		break; 							\
 	}
@@ -1218,7 +1218,7 @@ static void	op (expr_info *cx, int what)
 				yell("O: %s = %s (%ld %ld) -> 0",  	\
 					s, #intop, i, j); 		\
 			error("Division by zero"); 			\
-			add_var_alias(s, empty_string, 0);		\
+			add_variable(s, empty_string, 0, 0);		\
 			push_token(cx, 0);				\
 			break;						\
 		} 							\
@@ -1229,7 +1229,7 @@ static void	op (expr_info *cx, int what)
 									\
 		w = tokenize_float(cx, (intop));			\
 		t = get_token_expanded(cx, w);				\
-		add_var_alias(s, t, 0);					\
+		add_variable(s, t, 0, 0);				\
 		push_token(cx, w);					\
 		break; 							\
 	}
@@ -1256,7 +1256,7 @@ static void	op (expr_info *cx, int what)
 									\
 		w = tokenize_integer(cx, (intop_assign));		\
 		t = get_token_expanded(cx, w);				\
-		add_var_alias(s, t, 0);					\
+		add_variable(s, t, 0, 0);				\
 									\
 		push_integer(cx, (intop_result));			\
 		break; 							\
@@ -1419,7 +1419,7 @@ static void	op (expr_info *cx, int what)
 
 			malloc_strcat(&myval, t);
 			push_string(cx, myval);
-			add_var_alias(s, myval, 0);
+			add_variable(s, myval, 0, 0);
 			new_free(&myval);
 			break;
 		}
@@ -1438,7 +1438,7 @@ static void	op (expr_info *cx, int what)
 
 			malloc_strcat(&myval, t);
 			push_string(cx, myval);
-			add_var_alias(s, myval, 0);
+			add_variable(s, myval, 0, 0);
 			new_free(&myval);
 			break;
 		}
@@ -1452,7 +1452,7 @@ static void	op (expr_info *cx, int what)
 				yell("O: %s = (%s)", s, t);
 
 			push_token(cx, w);
-			add_var_alias(s, t, 0);
+			add_variable(s, t, 0, 0);
 			break;
 		}
 		case SWAP:
@@ -1477,8 +1477,8 @@ static void	op (expr_info *cx, int what)
 			if (x_debug & DEBUG_NEW_MATH_DEBUG)
 				yell("O: %s <=> %s", s, t);
 
-			add_var_alias(s, tval, 0);
-			add_var_alias(t, sval, 0);
+			add_variable(s, tval, 0, 0);
+			add_variable(t, sval, 0, 0);
 			push_token(cx, w);
 			break;
 		}

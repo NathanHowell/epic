@@ -1,4 +1,4 @@
-/* $EPIC: commands.c,v 1.44 2002/11/12 00:28:11 jnelson Exp $ */
+/* $EPIC: commands.c,v 1.44.2.1 2003/02/27 12:17:24 wd Exp $ */
 /*
  * commands.c -- Stuff needed to execute commands in ircII.
  *		 Includes the bulk of the built in commands for ircII.
@@ -3679,7 +3679,7 @@ BUILT_IN_COMMAND(returncmd)
 	else
 	{
 		if (args && *args)
-			add_local_alias("FUNCTION_RETURN", args, 0);
+			add_local_var("FUNCTION_RETURN", args, 0);
 		return_exception++;
 	}
 }

@@ -1,4 +1,4 @@
-/* $EPIC: irc.c,v 1.390.2.1 2002/11/20 17:49:21 wd Exp $ */
+/* $EPIC: irc.c,v 1.390.2.2 2003/02/27 12:17:24 wd Exp $ */
 /*
  * ircII: a new irc client.  I like it.  I hope you will too!
  *
@@ -1229,6 +1229,7 @@ int 	main (int argc, char *argv[])
 	parse_args(argc, argv);
 	init_binds();
 	init_keys();
+	namespace_init();
 
 	fprintf(stderr, "EPIC Version 4 -- %s\n", ridiculous_version_name);
 	fprintf(stderr, "EPIC Software Labs (2002)\n");

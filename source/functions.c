@@ -1,4 +1,4 @@
-/* $EPIC: functions.c,v 1.90 2002/11/20 03:54:08 wd Exp $ */
+/* $EPIC: functions.c,v 1.90.2.1 2003/02/27 12:17:24 wd Exp $ */
 /*
  * functions.c -- Built-in functions for ircII
  *
@@ -2307,7 +2307,7 @@ BUILT_IN_FUNCTION(function_splice, word)
 	m_sc3cat_s(&new_value, space, word, &clue);
 	m_sc3cat_s(&new_value, space, right_part, &clue);
 
-	add_var_alias(variable, new_value, 0);
+	add_variable(variable, new_value, 0, 0);
 
 	new_free(&old_value);
 	new_free(&new_value);
@@ -2514,7 +2514,7 @@ char *function_shift (char *word)
 	placeholder = value;
 	booya = m_strdup(new_next_arg(value, &value));
 	if (var)
-		add_var_alias(var, value, 0);
+		add_variable(var, value, 0, 0);
 	new_free(&placeholder);
 	if (!booya)
 		RETURN_EMPTY;
@@ -2535,7 +2535,7 @@ char *function_unshift (char *word)
 	booya = m_strdup(word);
 	m_s3cat_s(&booya, space, value);
 
-	add_var_alias(var, booya, 0);
+	add_variable(var, booya, 0, 0);
 	new_free(&value);
 	return booya;
 }
@@ -2549,7 +2549,7 @@ char *function_push (char *word)
 	upper(var);
 	value = get_variable(var);
 	m_s3cat(&value, space, word);
-	add_var_alias(var, value, 0);
+	add_variable(var, value, 0, 0);
 	return value;
 }
 
@@ -2578,12 +2578,12 @@ char *function_pop (char *word)
 
 	if (!(pointer = strrchr(value, ' ')))
 	{
-		add_var_alias(var, empty_string, 0); /* dont forget this! */
+		add_variable(var, empty_string, 0, 0); /* dont forget this! */
 		return value;	/* one word -- return it */
 	}
 
 	*pointer++ = 0;
-	add_var_alias(var, value, 0);
+	add_variable(var, value, 0, 0);
 
 	/* 
 	 * because pointer points to value, we *must* make a copy of it
@@ -2745,7 +2745,7 @@ BUILT_IN_FUNCTION(function_sar, word)
 	 * still points at the variable name.
 	 */
 	if (variable) 
-		add_var_alias(word, retval, 0);
+		add_variable(word, retval, 0, 0);
 
 	/* 
 	 * Free the 'text' we malloced before
@@ -4585,7 +4585,7 @@ BUILT_IN_FUNCTION(function_msar, word)
         } while (1);
 
         if (variable) 
-                add_var_alias(data, booya, 0);
+                add_variable(data, booya, 0, 0);
         new_free(&svalue);
         return (booya);
 }
@@ -5635,8 +5635,8 @@ static	char	*switches = NULL,
 	/* Terminating condition */
 	if (*swptr == 0)
 	{
-		add_var_alias(optopt_var, NULL, 0);
-		add_var_alias(optarg_var, aptr, 0);
+		add_variable(optopt_var, NULL, 0, 0);
+		add_variable(optarg_var, aptr, 0, 0);
 
 		*switches = 0;
 		*args = 0;
@@ -5653,20 +5653,20 @@ static	char	*switches = NULL,
 	switch (*swptr++)
 	{
 		case '_':	
-			add_var_alias(optopt_var, tmpstr, 0);
-			add_var_alias(optarg_var, NULL, 0);
+			add_variable(optopt_var, tmpstr, 0, 0);
+			add_variable(optarg_var, NULL, 0, 0);
 			RETURN_STR(tmpstr);
 		case ':':
-			add_var_alias(optopt_var, tmpstr, 0);
-			add_var_alias(optarg_var, next_arg(aptr, &aptr), 0);
+			add_variable(optopt_var, tmpstr, 0, 0);
+			add_variable(optarg_var, next_arg(aptr, &aptr), 0, 0);
 			RETURN_STR(tmpstr);
 		case '-':
-			add_var_alias(optopt_var, tmpstr, 0);
-			add_var_alias(optarg_var, NULL, 0);
+			add_variable(optopt_var, tmpstr, 0, 0);
+			add_variable(optarg_var, NULL, 0, 0);
 			RETURN_STR("-");
 		case '!':
-			add_var_alias(optopt_var, tmpstr, 0);
-			add_var_alias(optarg_var, NULL, 0);
+			add_variable(optopt_var, tmpstr, 0, 0);
+			add_variable(optarg_var, NULL, 0, 0);
 			RETURN_STR("!");
 		default:
 			/* This shouldn't happen */

@@ -1,4 +1,4 @@
-/* $EPIC: alias.c,v 1.11 2002/09/26 22:41:43 jnelson Exp $ */
+/* $EPIC: alias.c,v 1.11.2.1 2003/02/27 12:17:24 wd Exp $ */
 /*
  * alias.c -- Handles the whole kit and caboodle for aliases.
  *
@@ -35,17 +35,17 @@
  */
 /* Almost totaly rewritten by Jeremy Nelson (01/97) */
 
-#define __need_cs_alist_hash__
 #include "irc.h"
 #include "alias.h"
-#include "alist.h"
 #include "array.h"
 #include "commands.h"
 #include "files.h"
+#include "hash.h"
 #include "history.h"
 #include "hook.h"
 #include "input.h"
 #include "ircaux.h"
+#include "namespace.h"
 #include "output.h"
 #include "screen.h"
 #include "stack.h"
@@ -156,14 +156,6 @@ static  char *after_expando (char *start, int lvalue, int *call)
 /* Used for statistics gathering */
 static unsigned long 	alias_total_allocated = 0;
 static unsigned long 	alias_total_bytes_allocated = 0;
-static unsigned long 	var_cache_hits = 0;
-static unsigned long 	var_cache_misses = 0;
-static unsigned long 	var_cache_missed_by = 0;
-static unsigned long 	var_cache_passes = 0;
-static unsigned long 	cmd_cache_hits = 0;
-static unsigned long 	cmd_cache_misses = 0;
-static unsigned long 	cmd_cache_missed_by = 0;
-static unsigned long 	cmd_cache_passes = 0;
 
 /* Ugh. XXX Bag on the side */
 struct ArgListT {
@@ -188,8 +180,8 @@ void	destroy_arglist (ArgList *);
 
 /*
  * The following actions are supported:  add, delete, find, list
- * On the following types of data:	 var_alias, cmd_alias, local_alias
- * Except you cannot list or delete local_aliases.
+ * On the following types of data:	 variable, cmd_alias, local_var
+ * Except you cannot list or delete local_variables.
  *
  * To fetch a variable, use ``get_variable''
  * To fetch an alias, use ``get_cmd_alias''
@@ -205,19 +197,16 @@ void	destroy_arglist (ArgList *);
  * Specifically, if you create a global variable and then want to delete it,
  * try using a local variable so it is reaped automatically.
  */
-extern	void    add_var_alias      (char *name, char *stuff, int noisy);
-extern  void    add_local_alias    (char *name, char *stuff, int noisy);
-extern  void    add_cmd_alias      (char *name, ArgList *arglist, char *stuff);
-extern  void    add_var_stub_alias (char *name, char *stuff);
-extern  void    add_cmd_stub_alias (char *name, char *stuff);
-static	void	delete_var_alias   (char *name, int noisy);
+static  void    add_cmd_alias      (char *name, ArgList *arglist, char *stuff,
+	int stub);
+static	void	delete_variable   (char *name, int noisy);
 static	void	delete_cmd_alias   (char *name, int noisy);
-/*	void	delete_local_alias (char *name); 		*/
+/*	void	delete_local_var (char *name); 		*/
 static	void	unload_cmd_alias   (char *fn);
-static	void	unload_var_alias   (char *fn);
+static	void	unload_variable   (char *fn);
 static	void	list_cmd_alias     (char *name);
-static	void	list_var_alias     (char *name);
-static	void	list_local_alias   (char *name);
+static	void	list_variable     (char *name);
+static	void	list_local_var   (char *name);
 static	void 	destroy_aliases    (int type);
 
 extern	char *  get_variable            (char *name);
@@ -245,7 +234,6 @@ BUILT_IN_COMMAND(aliascmd)
 	char *name;
 	char *real_name;
 	char *ptr;
-	void show_alias_caches(void);
 
 	/*
 	 * If no name present, list all aliases
@@ -261,35 +249,10 @@ BUILT_IN_COMMAND(aliascmd)
 	 */
 	if (!my_strnicmp(name, "/S", 2))
 	{
-extern u_32int_t       bin_ints;
-extern u_32int_t       lin_ints;
-extern u_32int_t       bin_chars;
-extern u_32int_t       lin_chars;
-extern u_32int_t       alist_searches;
-extern u_32int_t       char_searches;
-
-
 	    say("Total aliases handled: %lu", 
 			alias_total_allocated);
 	    say("Total bytes allocated to aliases: %lu", 
 			alias_total_bytes_allocated);
-
-	    say("Var cache hits/misses/passes/missed-by [%lu/%lu/%lu/%3.1f]",
-			var_cache_hits, 
-			var_cache_misses, 
-			var_cache_passes, 
-			( var_cache_misses ? (double) 
-			  (var_cache_missed_by / var_cache_misses) : 0.0));
-	    say("Cmd cache hits/misses/passes/missed-by [%lu/%lu/%lu/%3.1f]",
-			cmd_cache_hits, 
-			cmd_cache_misses, 
-			cmd_cache_passes,
-			( cmd_cache_misses ? (double)
-			  (cmd_cache_missed_by / cmd_cache_misses) : 0.0));
-	    say("Ints(bin/lin)/Chars(bin/lin)/Lookups: [(%lu/%lu)/(%lu/%lu)] (%lu/%lu)",
-			 (unsigned long)bin_ints, (unsigned long)lin_ints, (unsigned long)bin_chars, (unsigned long)lin_chars,
-			 (unsigned long) alist_searches, (unsigned long)char_searches);
-	    show_alias_caches();
 	    return;
 	}
 
@@ -391,7 +354,7 @@ extern u_32int_t       char_searches;
 		/*
 		 * Register the alias
 		 */
-		add_cmd_alias(real_name, arglist, args);
+		add_cmd_alias(real_name, arglist, args, 0);
 	}
 
 	new_free(&real_name);
@@ -413,7 +376,7 @@ BUILT_IN_COMMAND(assigncmd)
 	 */
 	if (!(name = next_arg(args, &args)))
 	{
-		list_var_alias(NULL);
+		list_variable(NULL);
 		return;
 	}
 
@@ -441,7 +404,7 @@ BUILT_IN_COMMAND(assigncmd)
 		if (real_name[0] == '-')
 		{
 			if (real_name[1])
-				delete_var_alias(real_name + 1, 1);
+				delete_variable(real_name + 1, 1);
 			else
 				say("You must specify an alias to be removed.");
 		}
@@ -450,14 +413,14 @@ BUILT_IN_COMMAND(assigncmd)
 		 * Otherwise, the user wants us to list the variable
 		 */
 		else
-			list_var_alias(real_name);
+			list_variable(real_name);
 	}
 
 	/*
 	 * Register the variable
 	 */
 	else
-		add_var_alias(real_name, args, 1);
+		add_variable(real_name, args, 1, 0);
 
 	new_free(&real_name);
 	return;
@@ -540,9 +503,9 @@ const 	char 	*usage = "Usage: %s (alias|assign) <name> <file> [<file> ...]";
 
 		real_name = remove_brackets(name, NULL, NULL);
 		if (type == COMMAND_ALIAS)
-			add_cmd_stub_alias(real_name, args);
+			add_cmd_alias(real_name, NULL, args, 1);
 		else
-			add_var_stub_alias(real_name, args);
+			add_variable(real_name, args, 0, 1);
 
 		new_free(&real_name);
 		name = next_name;
@@ -555,7 +518,7 @@ BUILT_IN_COMMAND(localcmd)
 
 	if (!(name = next_arg(args, &args)))
 	{
-		list_local_alias(NULL);
+		list_local_var(NULL);
 		return;
 	}
 
@@ -580,7 +543,7 @@ BUILT_IN_COMMAND(localcmd)
 			*next_name++ = 0;
 
 		real_name = remove_brackets(name, NULL, NULL);
-		add_local_alias(real_name, args, 1);
+		add_local_var(real_name, args, 1);
 		new_free(&real_name);
 		name = next_name;
 	}
@@ -640,7 +603,7 @@ BUILT_IN_COMMAND(unloadcmd)
 		say("Removing aliases from %s ...", filename);
 		unload_cmd_alias(filename);
 		say("Removing assigns from %s ...", filename);
-		unload_var_alias(filename);
+		unload_variable(filename);
 		say("Removing hooks from %s ...", filename);
 		unload_on_hooks(filename);
 		say("Removing keybinds from %s ...", filename);
@@ -788,7 +751,7 @@ void	prepare_alias_call (void *al, char **stuff)
 		}
 
 		/* Add the local variable */
-		add_local_alias(args->vars[i], next_val, 0);
+		add_local_var(args->vars[i], next_val, 0);
 		if (expanded)
 			new_free(&expanded);
 	}
@@ -799,50 +762,9 @@ void	prepare_alias_call (void *al, char **stuff)
 }
 
 /**************************** INTERMEDIATE INTERFACE *********************/
-/* We define Alias here to keep it encapsulated */
-/*
- * This is the description of an alias entry
- * This is an ``array_item'' structure
- */
-typedef	struct	AliasItemStru
-{
-	char	*name;			/* name of alias */
-	u_32int_t hash;			/* Hash of the name */
-	char	*stuff;			/* what the alias is */
-	char	*stub;			/* the file its stubbed to */
-	char	*filename;		/* file it was loaded from */
-	int	line;			/* line it was loaded from */
-	int	global;			/* set if loaded from `global' */
-	int	cache_revoked;		/* Cache revocation index */
-	ArgList *arglist;		/* List of arguments to alias */
-}	Alias;
-
-/*
- * This is the description for a list of aliases
- * This is an ``array_set'' structure
- */
-#define ALIAS_CACHE_SIZE 4
-
-typedef struct	AliasStru
-{
-	Alias **	list;
-	int		max;
-	int		max_alloc;
-	alist_func 	func;
-	hash_type	hash;
-	Alias  **	cache;
-	int		cache_size;
-	int		revoke_index;
-}	AliasSet;
-
-static AliasSet var_alias = 	{ NULL, 0, 0, strncmp, 
-					HASH_INSENSITIVE, NULL, 0, 0 };
-static AliasSet cmd_alias = 	{ NULL, 0, 0, strncmp, 
-					HASH_INSENSITIVE, NULL, 0, 0 };
-
-static	Alias *	find_var_alias     (char *name);
-static	Alias *	find_cmd_alias     (char *name, int *cnt);
-static	Alias *	find_local_alias   (char *name, AliasSet **list);
+static	namespace_t *extract_namespace(char **name);
+static	Alias *	find_variable     (char *name, int local);
+static	Alias *	find_cmd_alias     (char *name);
 
 /*
  * This is the ``stack frame''.  Each frame has a ``name'' which is
@@ -855,7 +777,8 @@ typedef struct RuntimeStackStru
 {
 	const char *name;	/* Name of the stack */
 	char 	*current;	/* Current cmd being executed */
-	AliasSet alias;		/* Local variables */
+	hashtable_t *vtable;	/* variable table */
+	LIST_HEAD(, AliasItemStru) vlist; /* and list */
 	int	locked;		/* Are we locked in a wait? */
 	int	parent;		/* Our parent stack frame */
 }	RuntimeStack;
@@ -868,37 +791,56 @@ static 	RuntimeStack *call_stack = NULL;
 	int 	max_wind = -1;
 	int 	wind_index = -1;
 
+static	Alias *	find_local_var   (char *name, RuntimeStack **frame);
 
-void show_alias_caches(void)
-{
-	int i;
-	for (i = 0; i < var_alias.cache_size; i++)
-	{
-		if (var_alias.cache[i])
-			yell("VAR cache [%d]: [%s] [%s]", i, var_alias.cache[i]->name, var_alias.cache[i]->stuff);
-		else
-			yell("VAR cache [%d]: empty", i);
-	}
+/* this function extracts the namespace portion from a string.  it returns
+ * the namespace (if it exists!) and stores the remaining portion in name.
+ * If the description is for a local space (:var) it will return a special
+ * 'magic' value as the address.  This should be used by all functions below
+ * to figure out what a name is supposed to be. */
+#define LOCAL_NAMESPACE (namespace_t *)0xf0010ca1 /* heh! */
+static namespace_t *extract_namespace(char **name) {
+    char *s;
+    char *start = *name;
+    namespace_t *nsp;
 
-	for (i = 0; i < cmd_alias.cache_size; i++)
-	{
-		if (cmd_alias.cache[i])
-			yell("CMD cache [%d]: [%s] [%s]", i, cmd_alias.cache[i]->name, cmd_alias.cache[i]->stuff);
-		else
-			yell("CMD cache [%d]: empty", i);
-	}
+    if ((s = strrchr(*name, ':')) == NULL)
+	return namespaces.root; /* a global object in the root space */
+
+    /* Otherwise, we need to set 'name' correctly, then decide if we have a
+     * namespace or just a 'local' specifier. */
+    *name = s + 1;
+    if (s == (start - 1))
+	/* this means the string is of the form ':name'.  It's local */
+	return LOCAL_NAMESPACE;
+
+    /* Now we know the string is at least of the form '...:word', make sure
+     * the form is really proper, then pass the find work to
+     * namespace_find(). */
+    if (*--s != ':')
+	/* This is a bogus name.  XXX: print a warning? */
+	return NULL;
+    else if (s == start)
+	return namespaces.root; /* it's actually the root namespace. */
+
+    *s = '\0';
+    nsp = namespace_find(start);
+    *s = ':';
+    return nsp;
 }
-
-
-
 
 Alias *make_new_Alias (char *name)
 {
-	Alias *tmp = (Alias *) new_malloc(sizeof(Alias));
-	tmp->name = m_strdup(name);
+	size_t len = strlen(name);
+
+	/* We do some evil voodoo here to locate the name at the end of the
+	 * alias structure for hashing it.  Ulch. :) */
+	Alias *tmp = (Alias *) new_malloc(sizeof(Alias) + len + 1);
+	tmp->name = (char *)tmp + sizeof(Alias);
+	strcpy(tmp->name, name);
+	tmp->nspace = namespaces.current;
 	tmp->stuff = tmp->stub = NULL;
 	tmp->line = current_line();
-	tmp->cache_revoked = 0;
 	tmp->filename = m_strdup(current_package());
 	tmp->arglist = NULL;
 	alias_total_bytes_allocated += sizeof(Alias) + strlen(name) +
@@ -908,7 +850,7 @@ Alias *make_new_Alias (char *name)
 
 
 /*
- * add_var_alias: Add a global variable
+ * add_variable: Add a global variable
  *
  * name -- name of the alias to create (must be canonicalized)
  * stuff -- what to have ``name'' expand to.
@@ -919,55 +861,52 @@ Alias *make_new_Alias (char *name)
  * If ``name'' refers to an already created local variable, that
  * local variable is used (invisibly)
  */
-void	add_var_alias	(char *name, char *stuff, int noisy)
+void	add_variable	(char *name, char *stuff, int noisy, int stub)
 {
 	char 	*ptr;
 	Alias 	*tmp = NULL;
 	int 	af;
 	int	local = 0;
 	char	*save;
+	namespace_t *nsp;
 
 	save = name = remove_brackets(name, NULL, &af);
-	if (*name == ':')
-	{
-		name++, local = 1;
-		if (*name == ':')
-			name++, local = -1;
+	if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE)
+		local = 1;
+	else if (nsp == NULL) {
+		yell("Unknown/invalid namespace in %s", save);
+		new_free(&save);
+		return;
 	}
 
-	/*
-	 * Weed out invalid variable names
-	 */
+	/* Weed out invalid variable names */
 	ptr = after_expando(name, 1, NULL);
 	if (*ptr)
 		error("ASSIGN names may not contain '%c' (You asked for [%s])", *ptr, name);
 
-	/*
-	 * Weed out FUNCTION_RETURN (die die die)
-	 */
-	else if (!strcmp(name, "FUNCTION_RETURN"))
-		add_local_alias(name, stuff, noisy);
+	/* Weed out FUNCTION_RETURN (die die die) */
+	else if (!strcmp(name, "FUNCTION_RETURN")) {
+		if (stub)
+			error("You may not stub the FUNCTION_RETURN variable.");
+		else
+			add_local_var(name, stuff, noisy);
+	}
 
-	/*
-	 * Pass the buck on local variables
-	 */
-	else if ((local == 1) || (local == 0 && find_local_alias(name, NULL)))
-		add_local_alias(name, stuff, noisy);
+	/* Pass the buck on local variables.  Variables are local if nsp is
+	 * 'the local namespace' or if save is the same as the 'modified'
+	 * name (which means there was no explicit namespace specified) and
+	 * the variable exists locally */
+	else if (nsp == LOCAL_NAMESPACE || (save == name &&
+		    find_local_var(name, NULL)))
+		add_local_var(name, stuff, noisy);
 
-	else if (stuff && *stuff)
-	{
-		int cnt, loc;
-
-		/*
-		 * Look to see if the given alias already exists.
-		 * If it does, and the ``stuff'' to assign to it is
-		 * empty, then we should remove the variable outright
-		 */
-		tmp = (Alias *) find_array_item ((array *)&var_alias, name, &cnt, &loc);
-		if (!tmp || cnt >= 0)
-		{
+	else if (stuff && *stuff) {
+		/* Try and find the alias.  If it does not exist, we create
+		 * it in the namespace given back to us */
+		if ((tmp = hash_find(nsp->vtable, name)) == NULL) {
 			tmp = make_new_Alias(name);
-			add_to_array ((array *)&var_alias, (array_item *)tmp);
+			hash_insert(nsp->vtable, tmp);
+			LIST_INSERT_HEAD(&nsp->vlist, tmp, lp);
 		}
 
 		/*
@@ -975,41 +914,47 @@ void	add_var_alias	(char *name, char *stuff, int noisy)
 		 */
 		if (strcmp(tmp->filename, current_package()))
 			malloc_strcpy(&(tmp->filename), current_package());
-		malloc_strcpy(&(tmp->stuff), stuff);
-		new_free(&tmp->stub);
+		if (stub) {
+			malloc_strcpy(&(tmp->stub), stuff);
+			new_free(&tmp->stuff);
+		} else {
+			malloc_strcpy(&(tmp->stuff), stuff);
+			new_free(&tmp->stub);
+		}
 		tmp->global = loading_global;
 
 		alias_total_allocated++;
-		alias_total_bytes_allocated += strlen(tmp->name) + strlen(tmp->stuff) + strlen(tmp->filename);
+		if (stub)
+			alias_total_bytes_allocated += strlen(tmp->stub);
+		else
+			alias_total_bytes_allocated += strlen(tmp->name) + strlen(tmp->stuff) + strlen(tmp->filename);
 
 		/*
 		 * And tell the user.
 		 */
-		if (noisy)
+		if (noisy && !stub)
 			say("Assign %s added [%s]", name, stuff);
-	}
-	else
-		delete_var_alias(name, noisy);
+		else if (stub)
+			say("Assign %s stubbed to file %s", name, stuff);
+	} else
+		delete_variable(save, noisy);
 
 	new_free(&save);
 	return;
 }
 
-void	add_local_alias	(char *name, char *stuff, int noisy)
+void	add_local_var	(char *name, char *stuff, int noisy)
 {
 	char 	*ptr;
 	Alias 	*tmp = NULL;
-	AliasSet *list = NULL;
+	RuntimeStack *rtsp;
 	int 	af;
 
 	name = remove_brackets(name, NULL, &af);
 
-	/*
-	 * Weed out invalid variable names
-	 */
+	/* Weed out invalid variable names */
 	ptr = after_expando(name, 1, NULL);
-	if (*ptr)
-	{
+	if (*ptr) {
 		error("LOCAL names may not contain '%c' (You asked for [%s])", 
 						*ptr, name);
 		new_free(&name);
@@ -1022,10 +967,10 @@ void	add_local_alias	(char *name, char *stuff, int noisy)
 	 * If it doesnt, then we add it to the current frame,
 	 * where it will be reaped later.
 	 */
-	if (!(tmp = find_local_alias (name, &list)))
-	{
+	if (!(tmp = find_local_var(name, &rtsp))) {
 		tmp = make_new_Alias(name);
-		add_to_array ((array *)list, (array_item *)tmp);
+		hash_insert(rtsp->vtable, tmp);
+		LIST_INSERT_HEAD(&rtsp->vlist, tmp, lp);
 	}
 
 	/* Fill in the interesting stuff */
@@ -1046,296 +991,139 @@ void	add_local_alias	(char *name, char *stuff, int noisy)
 	return;
 }
 
-void	add_cmd_alias	(char *name, ArgList *arglist, char *stuff)
+void	add_cmd_alias	(char *name, ArgList *arglist, char *stuff, int stub)
 {
 	Alias *tmp = NULL;
-	int cnt, af, loc;
+	int af;
+	char *save;
+	namespace_t *nsp;
 
-	name = remove_brackets(name, NULL, &af);
+	save = name = remove_brackets(name, NULL, &af);
 
-	tmp = (Alias *) find_array_item ((array *)&cmd_alias, name, &cnt, &loc);
-	if (!tmp || cnt >= 0)
-	{
+	if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE) {
+		yell("aliases cannot be local!");
+		new_free(&save);
+		return;
+	} else if (nsp == NULL) {
+		yell("Unknown/invalid namespace in %s", save);
+		new_free(&save);
+		return;
+	}
+
+	if ((tmp = hash_find(nsp->ftable, name)) == NULL) {
 		tmp = make_new_Alias(name);
-		add_to_array ((array *)&cmd_alias, (array_item *)tmp);
+		hash_insert(nsp->ftable, tmp);
+		LIST_INSERT_HEAD(&nsp->flist, tmp, lp);
 	}
 
 	if (strcmp(tmp->filename, current_package()))
 		malloc_strcpy(&(tmp->filename), current_package());
-	malloc_strcpy(&(tmp->stuff), stuff);
-	new_free(&tmp->stub);
+	if (stub) {
+		malloc_strcpy(&(tmp->stub), stuff);
+		new_free(&tmp->stuff);
+	} else {
+		malloc_strcpy(&(tmp->stuff), stuff);
+		new_free(&tmp->stub);
+	}
 	tmp->global = loading_global;
 	tmp->arglist = arglist;
 
 	alias_total_allocated++;
-	alias_total_bytes_allocated += strlen(tmp->stuff);
-	say("Alias	%s added [%s]", name, stuff);
-
-	new_free(&name);
-	return;
-}
-
-void	add_var_stub_alias  (char *name, char *stuff)
-{
-	Alias *tmp = NULL;
-	char *ptr;
-	int af;
-
-	name = remove_brackets(name, NULL, &af);
-
-	ptr = after_expando(name, 1, NULL);
-	if (*ptr)
-		error("Assign names may not contain '%c' (You asked for [%s])", *ptr, name);
-
-	else if (!strcmp(name, "FUNCTION_RETURN"))
-		error("You may not stub the FUNCTION_RETURN variable.");
-
-	else 
-	{
-		int cnt, loc;
-
-		tmp = (Alias *) find_array_item ((array *)&var_alias, name, &cnt, &loc);
-		if (!tmp || cnt >= 0)
-		{
-			tmp = make_new_Alias(name);
-			add_to_array ((array *)&var_alias, (array_item *)tmp);
-		}
-
-		if (strcmp(tmp->filename, current_package()))
-			malloc_strcpy(&(tmp->filename), current_package());
-		malloc_strcpy(&(tmp->stub), stuff);
-		new_free(&tmp->stuff);
-		tmp->global = loading_global;
-
-		alias_total_allocated++;
+	if (stub) {
 		alias_total_bytes_allocated += strlen(tmp->stub);
-		say("Assign %s stubbed to file %s", name, stuff);
+		say("Alias %s stubbed to file %s", name, stuff);
+	} else {
+		alias_total_bytes_allocated += strlen(tmp->stuff);
+		say("Alias	%s added [%s]", name, stuff);
 	}
 
-	new_free(&name);
+	new_free(&save);
 	return;
 }
-
-
-void	add_cmd_stub_alias  (char *name, char *stuff)
-{
-	Alias *tmp = NULL;
-	int cnt, af;
-
-	name = remove_brackets(name, NULL, &af);
-	if (!(tmp = find_cmd_alias (name, &cnt)) || cnt >= 0)
-	{
-		tmp = make_new_Alias(name);
-		add_to_array ((array *)&cmd_alias, (array_item *)tmp);
-	}
-
-	if (strcmp(tmp->filename, current_package()))
-		malloc_strcpy(&(tmp->filename), current_package());
-	malloc_strcpy(&(tmp->stub), stuff);
-	new_free(&tmp->stuff);
-	tmp->global = loading_global;
-
-	alias_total_allocated++;
-	alias_total_bytes_allocated += strlen(tmp->stub);
-	say("Alias %s stubbed to file %s", name, stuff);
-
-	new_free(&name);
-	return;
-}
-
 
 /************************ LOW LEVEL INTERFACE *************************/
-static void resize_cache (AliasSet *set, int newsize)
-{
-	int 	c, d;
-	int 	oldsize = set->cache_size;
-
-	set->cache_size = newsize;
-	if (newsize < oldsize)
-	{
-		for (d = oldsize; d < newsize; d++)
-			set->cache[d]->cache_revoked = ++set->revoke_index;
-	}
-
-	RESIZE(set->cache, Alias *, set->cache_size);
-	for (c = oldsize; c < set->cache_size; c++)
-		set->cache[c] = NULL;
-}
-
 static	int	unstub_in_progress = 0;
 
-/*
- * 'name' is expected to already be in canonical form (uppercase, dot notation)
- */
-static Alias *	find_var_alias (char *name)
-{
+
+/* 'name' is expected to already be in canonical form (uppercase, dot
+ * noation), local is true if local lookups should be performed, and false
+ * (0) otherwise. */
+static Alias *	find_variable (char *name, int local) {
 	Alias *	item = NULL;
-	int 	cache;
-	int 	loc;
-	int 	cnt = 0;
-	int 	i;
-	u_32int_t	mask;
-	u_32int_t	hash = cs_alist_hash(name, &mask);
+	char *save = name;
+	namespace_t *nsp;
 
-	if (!strncmp(name, "::", 2))
-		name += 2;		/* Accept ::global */
-
-	if (var_alias.cache_size == 0)
-		resize_cache(&var_alias, ALIAS_CACHE_SIZE);
-
-	for (cache = 0; cache < var_alias.cache_size; cache++)
-	{
-		if (var_alias.cache[cache] && var_alias.cache[cache]->name &&
-			(var_alias.cache[cache]->hash == hash) &&
-			!strcmp(name, var_alias.cache[cache]->name))
-		{
-			item = var_alias.cache[cache];
-			cnt = -1;
-			var_cache_hits++;
-			break;
-		}
-	}
-
-	if (!item)
-	{
-		cache = var_alias.cache_size - 1;
-		if ((item = (Alias *) find_array_item ((array *)&var_alias, name, &cnt, &loc)))
-			var_cache_misses++;
+	if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE) {
+		if (!local)
+		    return NULL;
 		else
-			var_cache_passes++;
-	}
+		    return find_local_var(name, NULL);
+	} else if (nsp == NULL)
+		return NULL;
 
-	if (cnt < 0)
-	{
-		if (var_alias.cache[cache])
-			var_alias.cache[cache]->cache_revoked = 
-					++var_alias.revoke_index;
+	if ((item = hash_find(nsp->vtable, name)) == NULL)
+	    return NULL; /* no luck */
 
-		for (i = cache; i > 0; i--)
-			var_alias.cache[i] = var_alias.cache[i - 1];
-		var_alias.cache[0] = item;
+	/* otherwise, we have to see if it is stubbed.  if it is, we need to
+	 * load the file it's stubbed in, and then try again. */
+	if (item->stub != NULL) {
+		char *file;
 
-		if (item->cache_revoked)
-		{
-			var_cache_missed_by += var_alias.revoke_index - 
-						item->cache_revoked;
+		file = LOCAL_COPY(item->stub);
+		delete_variable(item->name, 0);
+
+		if (!unstub_in_progress) {
+			unstub_in_progress = 1;
+			load("LOAD", file, empty_string);
+			unstub_in_progress = 0;
 		}
 
-		if (item->stub)
-		{
-			char *file;
-
-			file = LOCAL_COPY(item->stub);
-			delete_var_alias(item->name, 0);
-
-			if (!unstub_in_progress)
-			{
-				unstub_in_progress = 1;
-				load("LOAD", file, empty_string);
-				unstub_in_progress = 0;
-			}
-
-			/* 
-			 * At this point, we have to see if 'item' was
-			 * redefined by the /load.  We call find_var_alias 
-			 * recursively to pick up the new value
-			 */
-			if (!(item = find_var_alias(name)))
-				return NULL;
-		}
-
-		return item;
+		/* At this point, we have to see if 'item' was
+		 * redefined by the /load.  We call find_variable 
+		 * recursively to pick up the new value */
+		return find_variable(save, local);
 	}
 
-	return NULL;
+	return item;
 }
 
-static Alias *	find_cmd_alias (char *name, int *cnt)
+static Alias *	find_cmd_alias (char *name)
 {
-	Alias *		item = NULL;
-	int 		loc;
-	int 		i;
-	int 		cache;
-	u_32int_t	mask;
-	u_32int_t	hash = cs_alist_hash(name, &mask);
+	Alias * item = NULL;
+	char *save = name;
+	namespace_t *nsp;
 
-	if (cmd_alias.cache_size == 0)
-		resize_cache(&cmd_alias, ALIAS_CACHE_SIZE);
+	if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE ||
+		nsp == NULL)
+	    /* local namespaces are not supproted for aliases/functions */
+	    return NULL;
 
-	for (cache = 0; cache < cmd_alias.cache_size; cache++)
-	{
-		if (cmd_alias.cache[cache] && cmd_alias.cache[cache]->name &&
-			(cmd_alias.cache[cache]->hash == hash) &&
-			!strcmp(name, cmd_alias.cache[cache]->name))
-		{
-			item = cmd_alias.cache[cache];
-			*cnt = -1;
-			cmd_cache_hits++;
-			break;
+	if ((item = hash_find(nsp->ftable, name)) == NULL)
+	    return NULL; /* no luck */
+
+	/* otherwise, we have to see if it is stubbed.  if it is, we need to
+	 * load the file it's stubbed in, and then try again. */
+	if (item->stub != NULL) {
+		char *file;
+
+		file = LOCAL_COPY(item->stub);
+		delete_cmd_alias(item->name, 0);
+
+		if (!unstub_in_progress) {
+			unstub_in_progress = 1;
+			load("LOAD", file, empty_string);
+			unstub_in_progress = 0;
 		}
 
-		/* XXXX this is bad cause this is free()d! */
-		if (cmd_alias.cache[cache] && !cmd_alias.cache[cache]->name)
-			cmd_alias.cache[cache] = NULL;
+		/* At this point, we have to see if 'item' was
+		 * redefined by the /load.  We call find_variable 
+		 * recursively to pick up the new value */
+		return find_cmd_alias(save);
 	}
 
-	if (!item)
-	{
-		cache = cmd_alias.cache_size - 1;
-		if ((item = (Alias *) find_array_item ((array *)&cmd_alias, name, cnt, &loc)))
-			cmd_cache_misses++;
-		else
-			cmd_cache_passes++;
-	}
-
-	if (*cnt < 0 || *cnt == 1)
-	{
-		if (cmd_alias.cache[cache])
-			cmd_alias.cache[cache]->cache_revoked = 
-					++cmd_alias.revoke_index;
-
-		for (i = cache; i > 0; i--)
-			cmd_alias.cache[i] = cmd_alias.cache[i - 1];
-		cmd_alias.cache[0] = item;
-
-		if (item->cache_revoked)
-		{
-			cmd_cache_missed_by += cmd_alias.revoke_index - 
-						item->cache_revoked;
-		}
-
-		if (item->stub)
-		{
-			char *file;
-
-			file = LOCAL_COPY(item->stub);
-			delete_cmd_alias(item->name, 0);
-
-			if (!unstub_in_progress)
-			{
-				unstub_in_progress = 1;
-				load("LOAD", file, empty_string);
-				unstub_in_progress = 0;
-			}
-
-			/* 
-			 * At this point, we have to see if 'item' was
-			 * redefined by the /load.  We call find_cmd_alias 
-			 * recursively to pick up the new value
-			 */
-			item = find_cmd_alias(name, cnt);
-
-			if (!item)
-				return NULL;
-		}
-
-		if (!item->stuff)
-			panic("item->stuff is NULL and it shouldn't be.");
-
-		return item;
-	}
-
-	return NULL;
+	if (item->stuff == NULL)
+		panic("item->stuff is NULL and it shouldn't be.");
+	return item;
 }
 
 
@@ -1347,12 +1135,11 @@ static Alias *	find_cmd_alias (char *name, int *cnt)
  * is an exact leading subset of ``name'' and that variable ends in a
  * period (a dot).
  */
-static Alias *	find_local_alias (char *name, AliasSet **list)
+static Alias *	find_local_var (char *name, RuntimeStack **frame)
 {
 	Alias 	*alias = NULL;
 	int 	c = wind_index;
 	char 	*ptr;
-	int 	implicit = -1;
 	int	function_return = 0;
 
 	/* No name is an error */
@@ -1385,58 +1172,35 @@ static Alias *	find_local_alias (char *name, AliasSet **list)
 		if (x_debug & DEBUG_LOCAL_VARS)
 			yell("Looking for [%s] in level [%d]", name, c);
 
-		if (call_stack[c].alias.list)
-		{
-			int x, cnt, loc;
+		if (!LIST_EMPTY(&call_stack[c].vlist)) {
+			char *s, save;
 
 			/* We can always hope that the variable exists */
-			find_array_item((array*)&call_stack[c].alias, name, &cnt, &loc);
-			if (cnt < 0)
-				alias = call_stack[c].alias.list[loc];
-
+			alias = hash_find(call_stack[c].vtable, name);
 			/* XXXX - This is bletcherous */
-			/*
-			 * I agree, however, there doesn't seem to be any other
-			 * reasonable way to do it.  I guess launching multiple
-			 * binary searches on relevant portions of name would
-			 * do it, but the overhead could(?) do damage.
+			/* Okay, the basic concept here, is that we need to
+			 * find out if there is any 'local scope'
+			 * predeclared.  So what we do is see if the name
+			 * we're looking for has a period (.) in it and, if
+			 * it does, truncate at that first period
+			 * temporarily and do a lookup in this scope.  If we
+			 * find something, we know it's a local scope
+			 * predeclaration, and implicitly create the
+			 * variable.
 			 *
-			 * Actualy, thinking about it again, seperating the
-			 * implicit variables from the normal ones would
-			 * probably work.
-			 */
-			else if (strchr(name, '.'))
-				for (x = 0; x < loc; x++)
-			{
-				size_t len = strlen(call_stack[c].alias.list[x]->name);
-
-				if (streq(call_stack[c].alias.list[x]->name, name) == len)
-				{
-					if (call_stack[c].alias.list[x]->name[len-1] == '.') {
-						implicit = c;
-						break;
-					}
-#if 0
-					else if (strlen(name) == len)
-					{
-						alias = call_stack[c].alias.list[x];
-						break;
-					}
-#endif
-				}
-#if 0
-				else
-				{
-					if (my_stricmp(call_stack[c].alias.list[x]->name, name) > 0)
-						continue;
-				}
-#endif
-			}
-
-			if (!alias && implicit >= 0)
-			{
+			 * This is really braindead. */
+			if (alias == NULL && (s = strchr(name, '.')) != NULL) {
+			    save = *++s;
+			    *s = '\0';
+			    if (hash_find(call_stack[c].vtable, name ) !=
+				    NULL) {
+				/* implicit creation.. */
 				alias = make_new_Alias(name);
-				add_to_array ((array *)&call_stack[implicit].alias, (array_item *)alias);
+				hash_insert(call_stack[c].vtable, alias);
+				LIST_INSERT_HEAD(&call_stack[c].vlist,
+					alias, lp);
+			    }
+			    *s = save;
 			}
 		}
 
@@ -1457,12 +1221,12 @@ static Alias *	find_local_alias (char *name, AliasSet **list)
 
 	if (alias)
 	{
-		if (list)
-			*list = &call_stack[c].alias;
+		if (frame != NULL)
+			*frame = &call_stack[c];
 		return alias;
 	}
-	else if (list)
-		*list = &call_stack[wind_index].alias;
+	else if (frame)
+		*frame = &call_stack[wind_index];
 
 	return NULL;
 }
@@ -1472,30 +1236,32 @@ static Alias *	find_local_alias (char *name, AliasSet **list)
 
 
 static
-void	delete_var_alias (char *name, int noisy)
+void	delete_variable (char *name, int noisy)
 {
 	Alias *item;
 	int i;
+	namespace_t *nsp;
+	char *save = name;
 
-	upper(name);
-	if ((item = (Alias *)remove_from_array ((array *)&var_alias, name)))
-	{
-		for (i = 0; i < var_alias.cache_size; i++)
-		{
-			if (var_alias.cache[i] == item)
-				var_alias.cache[i] = NULL;
-		}
+	if ((nsp = extract_namespace(&name))  == LOCAL_NAMESPACE) {
+		yell("Trying to delete local variables in the wrong place!");
+		return;
+	} else if (nsp == NULL) {
+		yell("Unknown/invalid namespace in %s", save);
+		return;
+	}
 
-		new_free(&(item->name));
+	if ((item = hash_find(nsp->vtable, name)) != NULL) {
+		hash_delete(nsp->vtable, item);
+		LIST_REMOVE(item, lp);
 		new_free(&(item->stuff));
 		new_free(&(item->stub));
 		new_free(&(item->filename));
 		new_free((char **)&item);
 		if (noisy)
-			say("Assign %s removed", name);
-	}
-	else if (noisy)
-		say("No such assign: %s", name);
+			say("Assign %s removed", save);
+	} else if (noisy)
+		say("No such assign: %s", save);
 }
 
 static
@@ -1503,17 +1269,20 @@ void	delete_cmd_alias (char *name, int noisy)
 {
 	Alias *item;
 	int i;
+	namespace_t *nsp;
+	char *save = name;
 
-	upper(name);
-	if ((item = (Alias *)remove_from_array ((array *)&cmd_alias, name)))
-	{
-		for (i = 0; i < cmd_alias.cache_size; i++)
-		{
-			if (cmd_alias.cache[i] == item)
-				cmd_alias.cache[i] = NULL;
-		}
+	if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE) {
+		yell("Trying to delete local variables in the wrong place!");
+		return;
+	} else if (nsp == NULL) {
+		yell("Unknown/invalid namespace in %s", save);
+		return;
+	}
 
-		new_free(&(item->name));
+	if ((item = hash_find(nsp->ftable, name)) != NULL) {
+		hash_delete(nsp->ftable, item);
+		LIST_REMOVE(item, lp);
 		new_free(&(item->stuff));
 		new_free(&(item->stub));
 		new_free(&(item->filename));
@@ -1528,14 +1297,12 @@ void	delete_cmd_alias (char *name, int noisy)
 
 
 
-
-
-static void	list_local_alias (char *name)
-{
-	int len = 0, cnt;
-	int DotLoc, LastDotLoc = 0;
-	char *LastStructName = NULL;
-	char *s;
+/* XXX: I have severely munged the stuff below  It still works, in spirit,
+ * but it definitely has some issues.  Things are not as neat as they used
+ * to be. :( */
+static void	list_local_var (char *name) {
+	int len, cnt;
+	Alias *ap;
 
 	say("Visible Local Assigns:");
 	if (name)
@@ -1543,26 +1310,11 @@ static void	list_local_alias (char *name)
 
 	for (cnt = wind_index; cnt >= 0; cnt = call_stack[cnt].parent)
 	{
-		int x;
-		if (!call_stack[cnt].alias.list)
-			continue;
-		for (x = 0; x < call_stack[cnt].alias.max; x++)
-		{
-			if (!name || !strncmp(call_stack[cnt].alias.list[x]->name, name, len))
-			{
-				if ((s = strchr(call_stack[cnt].alias.list[x]->name + len, '.')))
-				{
-					DotLoc = s - call_stack[cnt].alias.list[x]->name;
-					if (!LastStructName || (DotLoc != LastDotLoc) || strncmp(call_stack[cnt].alias.list[x]->name, LastStructName, DotLoc))
-					{
-						put_it("\t%*.*s\t<Structure>", DotLoc, DotLoc, call_stack[cnt].alias.list[x]->name);
-						LastStructName = call_stack[cnt].alias.list[x]->name;
-						LastDotLoc = DotLoc;
-					}
-				}
-				else
-					put_it("\t%s\t%s", call_stack[cnt].alias.list[x]->name, call_stack[cnt].alias.list[x]->stuff);
-			}
+		if (LIST_EMPTY(&call_stack[cnt].vlist))
+		    continue;
+		LIST_FOREACH(ap, &call_stack[cnt].vlist, lp) {
+		    if (!name || !strncmp(ap->name, name, len))
+			put_it("\t%s\t%s", ap->name, ap->stuff);
 		}
 	}
 }
@@ -1571,51 +1323,36 @@ static void	list_local_alias (char *name)
  * This function is strictly O(N).  Its possible to address this.
  */
 static
-void	list_var_alias (char *name)
-{
-	int	len;
-	int	DotLoc,
-		LastDotLoc = 0;
-	char	*LastStructName = NULL;
-	int	cnt;
-	char	*s, *script;
+void	list_variable (char *name) {
+	Alias *ap;
+	int len = 0;
+	namespace_t *nsp;
+	char *save = name;
 
+	if (name != NULL) {
+	    if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE ||
+		    nsp == NULL) {
+		say("Unknown/invalid namespace in %s", save);
+		return;
+	    }
+	} else {
+	    nsp = namespaces.root;
+	    name = empty_string;
+	}
 	say("Assigns:");
 
-	if (name)
-	{
+	if (*name) {
 		upper(name);
 		len = strlen(name);
 	}
-	else
-		len = 0;
 
-	for (cnt = 0; cnt < var_alias.max; cnt++)
-	{
-		if (!name || !strncmp(var_alias.list[cnt]->name, name, len))
-		{
-			script = var_alias.list[cnt]->filename[0]
-				? var_alias.list[cnt]->filename
-				: "*";
-
-			if ((s = strchr(var_alias.list[cnt]->name + len, '.')))
-			{
-				DotLoc = s - var_alias.list[cnt]->name;
-				if (!LastStructName || (DotLoc != LastDotLoc) || strncmp(var_alias.list[cnt]->name, LastStructName, DotLoc))
-				{
-					say("[%s]\t%*.*s\t<Structure>", script, DotLoc, DotLoc, var_alias.list[cnt]->name);
-					LastStructName = var_alias.list[cnt]->name;
-					LastDotLoc = DotLoc;
-				}
-			}
-			else
-			{
-				if (var_alias.list[cnt]->stub)
-					say("[%s]\t%s STUBBED TO %s", script, var_alias.list[cnt]->name, var_alias.list[cnt]->stub);
-				else
-					say("[%s]\t%s\t%s", script, var_alias.list[cnt]->name, var_alias.list[cnt]->stuff);
-			}
-		}
+	LIST_FOREACH(ap, &nsp->vlist, lp) {
+	    if (!*name || !strncmp(ap->name, name, len)) {
+		if (ap->stub)
+		    say("\t%s STUBBED TO %s", ap->name, ap->stub);
+		else
+		    say("\t%s\t%s", ap->name, ap->stuff);
+	    }
 	}
 }
 
@@ -1625,54 +1362,43 @@ void	list_var_alias (char *name)
 static
 void	list_cmd_alias (char *name)
 {
-	int	len;
-	int	DotLoc,
-		LastDotLoc = 0;
-	char	*LastStructName = NULL;
-	int	cnt;
-	char	*s, *script;
+	Alias *ap;
+	int len = 0;
+	namespace_t *nsp;
+	char *save = name;
 
+	if (name != NULL) {
+	    if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE ||
+		    nsp == NULL) {
+		say("Unknown/invalid namespace in %s", save);
+		return;
+	    }
+	} else {
+	    nsp = namespaces.root;
+	    name = empty_string;
+	}
 	say("Aliases:");
 
-	if (name)
-	{
+	if (*name) {
 		upper(name);
 		len = strlen(name);
 	}
-	else
-		len = 0;
 
-	for (cnt = 0; cnt < cmd_alias.max; cnt++)
-	{
-		if (!name || !strncmp(cmd_alias.list[cnt]->name, name, len))
-		{
-			script = cmd_alias.list[cnt]->filename[0]
-				? cmd_alias.list[cnt]->filename : "*";
-
-			if ((s = strchr(cmd_alias.list[cnt]->name + len, '.')))
-			{
-				DotLoc = s - cmd_alias.list[cnt]->name;
-				if (!LastStructName || (DotLoc != LastDotLoc) || strncmp(cmd_alias.list[cnt]->name, LastStructName, DotLoc))
-				{
-					say("[%s]\t%*.*s\t<Structure>", script, DotLoc, DotLoc, cmd_alias.list[cnt]->name);
-					LastStructName = cmd_alias.list[cnt]->name;
-					LastDotLoc = DotLoc;
-				}
-			}
-			else
-			{
-				if (cmd_alias.list[cnt]->stub)
-					say("[%s]\t%s STUBBED TO %s", script, cmd_alias.list[cnt]->name, cmd_alias.list[cnt]->stub);
-				else
-					say("[%s]\t%s\t%s", script, cmd_alias.list[cnt]->name, cmd_alias.list[cnt]->stuff);
-			}
-		}
+	LIST_FOREACH(ap, &nsp->flist, lp) {
+	    if (!*name || !strncmp(ap->name, name, len)) {
+		if (ap->stub)
+		    say("\t%s STUBBED TO %s", ap->name, ap->stub);
+		else
+		    say("\t%s\t%s", ap->name, ap->stuff);
+	    }
 	}
 }
 
 /************************* UNLOADING SCRIPTS ************************/
 static void	unload_cmd_alias (char *filename)
 {
+	/* XXX: broken */
+#if 0
 	int 	cnt;
 
 	for (cnt = 0; cnt < cmd_alias.max; )
@@ -1682,19 +1408,23 @@ static void	unload_cmd_alias (char *filename)
 		else
 			cnt++;
 	}
+#endif
 }
 
-static void	unload_var_alias (char *filename)
+static void	unload_variable (char *filename)
 {
+	/* XXX: broken */
+#if 0
 	int 	cnt;
 
-	for (cnt = 0; cnt < var_alias.max;)
+	for (cnt = 0; cnt < variable.max;)
 	{
-		if (!strcmp(var_alias.list[cnt]->filename, filename))
-			delete_var_alias(var_alias.list[cnt]->name, 0);
+		if (!strcmp(variable.list[cnt]->filename, filename))
+			delete_variable(variable.list[cnt]->name, 0);
 		else
 			cnt++;
 	}
+#endif
 }
 
 
@@ -1716,7 +1446,7 @@ char 	*get_variable 	(char *str)
 static 
 char	*get_variable_with_args (const char *str, const char *args, int *args_flag)
 {
-	Alias	*alias = NULL;
+	Alias	*var = NULL;
 	char	*ret = NULL;
 	char	*name = NULL;
 	char	*freep = NULL;
@@ -1725,38 +1455,23 @@ char	*get_variable_with_args (const char *str, const char *args, int *args_flag)
 
 	freep = name = remove_brackets(str, args, args_flag);
 
-	/*
-	 * Support $:var to mean local variable ONLY (no globals)
-	 * Support $::var to mean global variable ONLY (no locals)
-	 * Support $: with nothing after it as a built in expando.  Ick.
-	 */
-	if (*name == ':' && name[1])
-	{
-		name++, local = 1;
-		if (*name == ':')
-			name++, local = -1;
-	}
-
-	/*
-	 * local == -1  means "local variables not allowed"
-	 * local == 0   means "locals first, then globals"
-	 * local == 1   means "global variables not allowed"
-	 */
-	if ((local != -1) && (alias = find_local_alias(name, NULL)))
-		copy = 1, ret = alias->stuff;
-	else if (local == 1)
-		;
-	else if ((alias = find_var_alias(name)) != NULL)
-		copy = 1, ret = alias->stuff;
-	else if ((strlen(str) == 1) && (ret = built_in_alias(*str, NULL)))
-		copy = 0;
+	/* ugh.  support '$:' expando first (otherwise the namespace decoder
+	 * will get confused), then check variables, then builtins, then
+	 * SETs, then environment variables. */
+	if (name[0] == ':' && name[1] == '\0') {
+	    copy = 0;
+	    ret = built_in_alias(*name, NULL);
+	} else if ((var = find_variable(name, 1)) != NULL) {
+	    copy = 1;
+	    ret = var->stuff;
+	} else if (str[1] == '\0' && (ret = built_in_alias(*str, NULL)))
+	    copy = 0;
 	else if ((ret = make_string_var(str)))
 		copy = 0;
-	else
-		copy = 1, ret = getenv(str);
-
-	if (x_debug & DEBUG_UNKNOWN && ret == NULL)
-		yell("Variable lookup to non-existant assign [%s]", name);
+	else if ((ret = getenv(str)))
+	    copy = 1;
+	else if (x_debug & DEBUG_UNKNOWN && ret == NULL)
+	    yell("Variable lookup to non-existant assign [%s]", name);
 
 	new_free(&freep);
 	return (copy ? m_strdup(ret) : ret);
@@ -1766,52 +1481,43 @@ char *	get_cmd_alias (char *name, int *howmany, char **complete_name, void **arg
 {
 	Alias *item;
 
-	if ((item = find_cmd_alias(name, howmany)))
-	{
+	if ((item = find_cmd_alias(name)) != NULL) {
+		*howmany = 1;
 		if (complete_name)
 			malloc_strcpy(complete_name, item->name);
 		if (args)
 			*args = (void *)item->arglist;
 		return item->stuff;
 	}
+	*howmany = 0;
 	return NULL;
 }
 
 /*
  * This function is strictly O(N).  This should probably be addressed.
- *
- * Updated as per get_subarray_elements.
+ * XXX: Namespace support is missing (it assumes root space)
  */
 char **	glob_cmd_alias (char *name, int *howmany)
 {
-	int	pos, max;
-	int    	cnt;
-	int     len;
-	char    **matches = NULL;
-	int     matches_size = 0;
+	Alias *ap;
+	int len;
+	char **matches = NULL;
+	int matches_size = 0;
 
 	len = strlen(name);
 	*howmany = 0;
-	if (len) {
-		find_array_item((array*)&cmd_alias, name, &max, &pos);
-	} else {
-		pos = 0;
-		max = cmd_alias.max;
-	}
-	if (0 > max) max = -max;
-
-	for (cnt = 0; cnt < max; cnt++, pos++)
-	{
-		if (strchr(cmd_alias.list[pos]->name + len, '.'))
+	LIST_FOREACH(ap, &namespaces.root->flist, lp) {
+	    if (!strncasecmp(ap->name, name, len)) {
+		if (strchr(ap->name + len, '.'))
 			continue;
 
-		if (*howmany >= matches_size)
-		{
+		if (*howmany >= matches_size) {
 			matches_size += 5;
 			RESIZE(matches, char *, matches_size + 1);
 		}
-		matches[*howmany] = m_strdup(cmd_alias.list[pos]->name);
+		matches[*howmany] = m_strdup(ap->name);
 		*howmany += 1;
+	    }
 	}
 
 	if (*howmany)
@@ -1824,39 +1530,29 @@ char **	glob_cmd_alias (char *name, int *howmany)
 
 /*
  * This function is strictly O(N).  This should probably be addressed.
- *
- * Updated as per get_subarray_elements.
+ * XXX: Namespace support is missing (it assumes root space)
  */
 char **	glob_assign_alias (char *name, int *howmany)
 {
-	int	pos, max;
-	int    	cnt;
-	int     len;
-	char    **matches = NULL;
-	int     matches_size = 0;
+	Alias *ap;
+	int len;
+	char **matches = NULL;
+	int matches_size = 0;
 
 	len = strlen(name);
 	*howmany = 0;
-	if (len) {
-		find_array_item((array*)&var_alias, name, &max, &pos);
-	} else {
-		pos = 0;
-		max = var_alias.max;
-	}
-	if (0 > max) max = -max;
-
-	for (cnt = 0; cnt < max; cnt++, pos++)
-	{
-		if (strchr(var_alias.list[pos]->name + len, '.'))
+	LIST_FOREACH(ap, &namespaces.root->flist, lp) {
+	    if (!strncasecmp(ap->name, name, len)) {
+		if (strchr(ap->name + len, '.'))
 			continue;
 
-		if (*howmany >= matches_size)
-		{
+		if (*howmany >= matches_size) {
 			matches_size += 5;
 			RESIZE(matches, char *, matches_size + 1);
 		}
-		matches[*howmany] = m_strdup(var_alias.list[pos]->name);
+		matches[*howmany] = m_strdup(ap->name);
 		*howmany += 1;
+	    }
 	}
 
 	if (*howmany)
@@ -1872,27 +1568,26 @@ char **	glob_assign_alias (char *name, int *howmany)
  */
 char **	pmatch_cmd_alias (char *name, int *howmany)
 {
-	int	cnt;
-	int 	len;
-	char 	**matches = NULL;
-	int 	matches_size = 5;
+	Alias *ap;
+	int len;
+	char **matches = NULL;
+	int matches_size = 0;
 
 	len = strlen(name);
 	*howmany = 0;
-	matches = RESIZE(matches, char *, matches_size);
 
-	for (cnt = 0; cnt < cmd_alias.max; cnt++)
-	{
-		if (wild_match(name, cmd_alias.list[cnt]->name))
-		{
-			matches[*howmany] = m_strdup(cmd_alias.list[cnt]->name);
-			*howmany += 1;
-			if (*howmany == matches_size)
-			{
-				matches_size += 5;
-				RESIZE(matches, char *, matches_size);
-			}
+	LIST_FOREACH(ap, &namespaces.root->flist, lp) {
+	    if (wild_match(name, ap->name)) {
+		if (strchr(ap->name + len, '.'))
+			continue;
+
+		if (*howmany >= matches_size) {
+			matches_size += 5;
+			RESIZE(matches, char *, matches_size + 1);
 		}
+		matches[*howmany] = m_strdup(ap->name);
+		*howmany += 1;
+	    }
 	}
 
 	if (*howmany)
@@ -1908,27 +1603,26 @@ char **	pmatch_cmd_alias (char *name, int *howmany)
  */
 char **	pmatch_assign_alias (char *name, int *howmany)
 {
-	int    	cnt;
-	int     len;
-	char    **matches = NULL;
-	int     matches_size = 5;
+	Alias *ap;
+	int len;
+	char **matches = NULL;
+	int matches_size = 0;
 
 	len = strlen(name);
 	*howmany = 0;
-	matches = RESIZE(matches, char *, matches_size);
 
-	for (cnt = 0; cnt < var_alias.max; cnt++)
-	{
-		if (wild_match(name, var_alias.list[cnt]->name))
-		{
-			matches[*howmany] = m_strdup(var_alias.list[cnt]->name);
-			*howmany += 1;
-			if (*howmany == matches_size)
-			{
-				matches_size += 5;
-				RESIZE(matches, char *, matches_size);
-			}
+	LIST_FOREACH(ap, &namespaces.root->vlist, lp) {
+	    if (wild_match(name, ap->name)) {
+		if (strchr(ap->name + len, '.'))
+			continue;
+
+		if (*howmany >= matches_size) {
+			matches_size += 5;
+			RESIZE(matches, char *, matches_size + 1);
 		}
+		matches[*howmany] = m_strdup(ap->name);
+		*howmany += 1;
+	    }
 	}
 
 	if (*howmany)
@@ -1941,20 +1635,12 @@ char **	pmatch_assign_alias (char *name, int *howmany)
 
 /*
  * This function is strictly O(N).  This should probably be addressed.
- *
- * OK, so it isn't _strictly_ O(N) anymore, however, it is still O(N)
- * for N being all elements below the subarray being requested.  This
- * makes recursive /foreach's such as purge run much faster, however,
- * since each variable will be tested no more than its current depth
- * times, rather than every single time a /foreach is performed.
- *
- * In the worst case scenario where the entire variable space consists
- * of a single flat subarray, the new algorithm would perform no worse
- * than the old.
+ * XXX: No namespace support yet.
  */
 char **	get_subarray_elements (char *root, int *howmany, int type)
 {
-	AliasSet *as;		/* XXXX */
+	LIST_HEAD(, AliasItemStru) *list;
+	Alias *ap;
 	int pos, cnt, max;
 	int cmp = 0;
 	char **matches = NULL;
@@ -1963,30 +1649,28 @@ char **	get_subarray_elements (char *root, int *howmany, int type)
 	char *last = NULL;
 
 	if (type == COMMAND_ALIAS)
-		as = &cmd_alias;
+	    list = &namespaces.root->flist;
 	else
-		as = &var_alias;
-	root = m_2dup(root, ".");
-	find_array_item((array*)as, root, &max, &pos);
+	    list = &namespaces.root->vlist;
 
-	if (0 > max) max = -max;
+	root = m_2dup(root, ".");
 	*howmany = 0;
 	cmp = strlen(root);
-	new_free(&root);
 
-	for (cnt = 0; cnt < max; cnt++, pos++)
-	{
-		end = strcspn(ARRAY_ITEM(as, pos)->name + cmp, ".");
-		if (last && !my_strnicmp(ARRAY_ITEM(as, pos)->name, last, cmp + end))
-			continue;
-		if (*howmany >= matches_size)
-		{
+	LIST_FOREACH(ap, list, lp) {
+	    if (!strncasecmp(ap->name, root, cmp)) {
+		end = strcspn(ap->name + cmp, ".");
+		if (last != NULL && !strncasecmp(ap->name, last, cmp + end))
+		    continue; /* same as the last match.  move on. */
+
+		if (*howmany >= matches_size) {
 			matches_size = *howmany + 5;
 			RESIZE(matches, char *, matches_size + 1);
 		}
-		matches[*howmany] = m_strndup(ARRAY_ITEM(as, pos)->name, cmp + end);
+		matches[*howmany] = m_strndup(ap->name, cmp + end);
 		last = matches[*howmany];
 		*howmany += 1;
+	    }
 	}
 
 	if (*howmany)
@@ -2011,7 +1695,7 @@ static char *	parse_line_alias_special (char *name, char *what, char *args, int 
 	if (function)
 	{
 		last_function_call_level = wind_index;
-		add_local_alias("FUNCTION_RETURN", empty_string, 0);
+		add_local_var("FUNCTION_RETURN", empty_string, 0);
 	}
 	window_display = old_window_display;
 
@@ -2076,21 +1760,24 @@ void	call_user_alias	(char *alias_name, char *alias_stuff, char *args, void *arg
  */
 void 	save_assigns	(FILE *fp, int do_all)
 {
+#if 0
 	int cnt = 0;
 
-	for (cnt = 0; cnt < var_alias.max; cnt++)
+	for (cnt = 0; cnt < variable.max; cnt++)
 	{
-		if (!var_alias.list[cnt]->global || do_all)
+		if (!variable.list[cnt]->global || do_all)
 		{
-			if (var_alias.list[cnt]->stub)
+			if (variable.list[cnt]->stub)
 				fprintf(fp, "STUB ");
-			fprintf(fp, "ASSIGN %s %s\n", var_alias.list[cnt]->name, var_alias.list[cnt]->stuff);
+			fprintf(fp, "ASSIGN %s %s\n", variable.list[cnt]->name, variable.list[cnt]->stuff);
 		}
 	}
+#endif
 }
 
 void 	save_aliases (FILE *fp, int do_all)
 {
+#if 0
 	int	cnt = 0;
 
 	for (cnt = 0; cnt < cmd_alias.max; cnt++)
@@ -2102,20 +1789,22 @@ void 	save_aliases (FILE *fp, int do_all)
 			fprintf(fp, "ALIAS %s {%s}\n", cmd_alias.list[cnt]->name, cmd_alias.list[cnt]->stuff);
 		}
 	}	
+#endif
 }
 
 static
 void 	destroy_aliases (int type)
 {
+#if 0
 	int cnt = 0;
-	AliasSet *my_array = NULL;
+	hashtable_t *table = NULL;
 
 	if (type == COMMAND_ALIAS)
-		my_array = &cmd_alias;
+		table = namespaces.root->ftable;
 	else if (type == VAR_ALIAS)
-		my_array = &var_alias;
+		table = namespaces.root->vtable;
 	else if (type == VAR_ALIAS_LOCAL)
-		my_array = &call_stack[wind_index].alias;
+		table = &call_stack[wind_index].table;
 
 	for (cnt = 0; cnt < my_array->max; cnt++)
 	{
@@ -2130,6 +1819,7 @@ void 	destroy_aliases (int type)
 
 	new_free((void **)&(my_array->list));
 	my_array->max = my_array->max_alloc = 0;
+#endif
 }
 
 /******************* RUNTIME STACK SUPPORT **********************************/
@@ -2148,14 +1838,10 @@ void 	make_local_stack 	(const char *name)
 			max_wind <<= 1;
 
 		RESIZE(call_stack, RuntimeStack, max_wind);
-		for (; wind_index < max_wind; wind_index++)
-		{
-			call_stack[wind_index].alias.max = 0;
-			call_stack[wind_index].alias.max_alloc = 0;
-			call_stack[wind_index].alias.list = NULL;
-			call_stack[wind_index].alias.func = strncmp;
-			call_stack[wind_index].alias.cache = NULL;
-			call_stack[wind_index].alias.cache_size = -1;
+		for (; wind_index < max_wind; wind_index++) {
+			call_stack[wind_index].vtable = create_hash_table(4,
+				sizeof(Alias), NAMESPACE_HASH_SANITYLEN,
+				HASH_FL_NOCASE | HASH_FL_STRING, strcasecmp);
 			call_stack[wind_index].current = NULL;
 			call_stack[wind_index].name = NULL;
 			call_stack[wind_index].parent = -1;
@@ -2167,13 +1853,10 @@ void 	make_local_stack 	(const char *name)
 	destroy_local_stack();
 	wind_index++;		/* XXXX - chicanery */
 
-	if (name)
-	{
+	if (name) {
 		call_stack[wind_index].name = name;
 		call_stack[wind_index].parent = -1;
-	}
-	else
-	{
+	} else {
 		call_stack[wind_index].name = empty_string;
 		call_stack[wind_index].parent = wind_index - 1;
 	}
@@ -2201,8 +1884,11 @@ void 	destroy_local_stack 	(void)
 	/*
 	 * We clean up as best we can here...
 	 */
-	if (call_stack[wind_index].alias.list)
-		destroy_aliases(VAR_ALIAS_LOCAL);
+	if (call_stack[wind_index].vtable != NULL) {
+	    destroy_aliases(VAR_ALIAS_LOCAL);
+	    destroy_hash_table(call_stack[wind_index].vtable);
+	    call_stack[wind_index].vtable = NULL;
+	}
 	if (call_stack[wind_index].current)
 		call_stack[wind_index].current = 0;
 	if (call_stack[wind_index].name)
@@ -2335,16 +2021,14 @@ char 	*aliasctl 	(char *input)
 		case (SETPACKAGE) :
 		{
 			Alias *alias = NULL;
-			AliasSet *a_list;
-			int dummy;
 
 			upper(listc);
 			if (list == VAR_ALIAS_LOCAL)
-				alias = find_local_alias(listc, &a_list);
+				alias = find_local_var(listc, NULL);
 			else if (list == VAR_ALIAS)
-				alias = find_var_alias(listc);
+				alias = find_variable(listc, 0);
 			else
-				alias = find_cmd_alias(listc, &dummy);
+				alias = find_cmd_alias(listc);
 
 			if (alias)
 			{
@@ -2372,11 +2056,11 @@ char 	*aliasctl 	(char *input)
 		{
 			upper(listc);
 			if (list == VAR_ALIAS_LOCAL)
-				add_local_alias(listc, input, 0);
+				add_local_var(listc, input, 0);
 			else if (list == VAR_ALIAS)
-				add_var_alias(listc, input, 0);
+				add_variable(listc, input, 0, 0);
 			else
-				add_cmd_alias(listc, NULL, input);
+				add_cmd_alias(listc, NULL, input, 0);
 
 			RETURN_INT(1);
 		}
@@ -2451,6 +2135,7 @@ static	AliasStack *	assign_stack = NULL;
 
 void	do_stack_alias (int type, char *args, int which)
 {
+#if 0
 	char		*name;
 	AliasStack	*aptr, **aptrptr;
 	Alias		*alptr;
@@ -2486,28 +2171,14 @@ void	do_stack_alias (int type, char *args, int which)
 			if ((alptr = find_cmd_alias(args, &cnt)))
 				remove_from_array((array *)&cmd_alias, 
 					alptr->name);
-
-			/* XXX This shouldn't need be done here... */
-			for (i = 0; i < cmd_alias.cache_size; i++)
-			{
-				if (cmd_alias.cache[i] == alptr)
-					cmd_alias.cache[i] = NULL;
-			}
 		}
 		else
 		{
 			int	i;
 
-			if ((alptr = find_var_alias(args)))
-				remove_from_array((array *)&var_alias, 
+			if ((alptr = find_variable(args, 0)))
+				remove_from_array((array *)&variable, 
 					alptr->name);
-
-			/* XXX This shouldn't need be done here... */
-			for (i = 0; i < var_alias.cache_size; i++)
-			{
-				if (var_alias.cache[i] == alptr)
-					var_alias.cache[i] = NULL;
-			}
 		}
 
 		aptr = (AliasStack *)new_malloc(sizeof(AliasStack));
@@ -2542,7 +2213,7 @@ void	do_stack_alias (int type, char *args, int which)
 					if (which == STACK_DO_ALIAS)
 						add_to_array((array *)&cmd_alias, (array_item *)(aptr->list));
 					else
-						add_to_array((array *)&var_alias, (array_item *)(aptr->list));
+						add_to_array((array *)&variable, (array_item *)(aptr->list));
 				}
 
 				/* free it */
@@ -2573,5 +2244,6 @@ void	do_stack_alias (int type, char *args, int which)
 		return;
 	}
 	say("Unknown STACK type ??");
+#endif
 }
 
