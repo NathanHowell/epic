@@ -1,4 +1,4 @@
-/* $EPIC: alias.c,v 1.11.2.1 2003/02/27 12:17:24 wd Exp $ */
+/* $EPIC: alias.c,v 1.11.2.2 2003/02/27 12:42:48 wd Exp $ */
 /*
  * alias.c -- Handles the whole kit and caboodle for aliases.
  *
@@ -1061,6 +1061,13 @@ static Alias *	find_variable (char *name, int local) {
 	} else if (nsp == NULL)
 		return NULL;
 
+	/* try the local space first if we can.  that is, if local is set
+	 * and 'name' was unqualified (name == save) */
+	if (local && name == save &&
+		(item = find_local_var(name, NULL)) != NULL)
+	    return item;
+
+	/* no luck?  try the regular method */
 	if ((item = hash_find(nsp->vtable, name)) == NULL)
 	    return NULL; /* no luck */
 
@@ -1839,9 +1846,7 @@ void 	make_local_stack 	(const char *name)
 
 		RESIZE(call_stack, RuntimeStack, max_wind);
 		for (; wind_index < max_wind; wind_index++) {
-			call_stack[wind_index].vtable = create_hash_table(4,
-				sizeof(Alias), NAMESPACE_HASH_SANITYLEN,
-				HASH_FL_NOCASE | HASH_FL_STRING, strcasecmp);
+			call_stack[wind_index].vtable = NULL;
 			call_stack[wind_index].current = NULL;
 			call_stack[wind_index].name = NULL;
 			call_stack[wind_index].parent = -1;
@@ -1860,6 +1865,9 @@ void 	make_local_stack 	(const char *name)
 		call_stack[wind_index].name = empty_string;
 		call_stack[wind_index].parent = wind_index - 1;
 	}
+	call_stack[wind_index].vtable = create_hash_table(4,
+		sizeof(Alias), NAMESPACE_HASH_SANITYLEN,
+		HASH_FL_NOCASE | HASH_FL_STRING, strcasecmp);
 	call_stack[wind_index].locked = 0;
 }
 
