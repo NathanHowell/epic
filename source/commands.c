@@ -1,4 +1,4 @@
-/* $EPIC: commands.c,v 1.44.2.5 2003/03/26 09:20:46 wd Exp $ */
+/* $EPIC: commands.c,v 1.44.2.6 2003/03/26 09:53:28 wd Exp $ */
 /*
  * commands.c -- Stuff needed to execute commands in ircII.
  *		 Includes the bulk of the built in commands for ircII.
@@ -3309,10 +3309,8 @@ static int eat_cmd_chars(const char **line, int *noisy) {
 	if (*s == '^')
 	    *noisy = 0;
 	else if (*s == '/' || strchr(cmdchars, *s)) {
-	    if (++used == 2) {
-		s++;
+	    if (++used > 2)
 		break;
-	    }
 	} else
 	    break;
 	s++;
@@ -3359,7 +3357,7 @@ void	parse_line (const char *name, const char *org_line, const char *args,
 	if (org_line == NULL)
 		panic("org_line is NULL and it shouldn't be.");
 	else if (*org_line == '\0') {
-	    say("parse_line got blank line.  hrm.");
+	    yell("parse_line got blank line.  hrm.");
 	    return; /* this shouldn't happen any more.. */
 	}
 
@@ -3632,7 +3630,7 @@ static	unsigned 	level = 0;
 		    } else
 			set_input(empty_string);
 		} else if ((command = find_command(cline, &cmd_cnt)) != NULL &&
-			cmd_cnt == -1) {
+			cmd_cnt < 0) {
 		    /* A non-ambiguous command. */
 
 		    /* I should make a function to do this */
@@ -3660,7 +3658,7 @@ static	unsigned 	level = 0;
 		     * :P */
 		    send_to_server("%s %s", cline, rest);
 		else
-		    say("Unknown command: %s", cline);
+		    yell("Unknown command: %s", cline);
 	}
 	if (old_display_var != get_int_var(DISPLAY_VAR))
 		window_display = get_int_var(DISPLAY_VAR);

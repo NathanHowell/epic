@@ -1,4 +1,4 @@
-/* $EPIC: if.c,v 1.14.2.4 2003/03/26 09:20:46 wd Exp $ */
+/* $EPIC: if.c,v 1.14.2.5 2003/03/26 09:53:29 wd Exp $ */
 /*
  * if.c: the IF, WHILE, FOREACH, DO, FE, FEC, and FOR commands for IRCII 
  *
@@ -199,7 +199,7 @@ BUILT_IN_COMMAND(ifcmd)
 				current_line = NULL;
 		}
 
-		if (current_line)
+		if (current_line != NULL && *current_line)
 			parse_line(NULL, current_line, subargs, 0);
 
 		break;
