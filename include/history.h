@@ -11,7 +11,7 @@
 
 	BUILT_IN_COMMAND(history);
 	void	set_history_size 	(int);
-	void	add_to_history 		(char *);
+	void	add_to_history 		(const char *);
 	void	get_history 		(int);
 	char	*do_history 		(char *, char *);
 	void	shove_to_history 	(char, char *);

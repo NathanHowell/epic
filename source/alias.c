@@ -1,4 +1,4 @@
-/* $EPIC: alias.c,v 1.11.2.9 2003/03/25 13:16:53 wd Exp $ */
+/* $EPIC: alias.c,v 1.11.2.10 2003/03/26 09:20:45 wd Exp $ */
 /*
  * alias.c -- Handles the whole kit and caboodle for aliases.
  *
@@ -206,6 +206,7 @@ void	destroy_arglist (ArgList *);
  */
 static  void    add_cmd_alias      (char *name, ArgList *arglist, char *stuff,
 	int stub);
+static	Alias *	find_cmd_alias	    (char *);
 static	void	delete_variable   (char *name, int noisy);
 static	void	delete_cmd_alias   (char *name, int noisy);
 /*	void	delete_local_var (char *name); 		*/
@@ -222,8 +223,6 @@ extern	char ** glob_cmd_alias          (char *name, int *howmany);
 extern	char ** glob_assign_alias	(char *name, int *howmany);
 extern	char ** pmatch_cmd_alias        (char *name, int *howmany);
 extern	char ** pmatch_assign_alias	(char *name, int *howmany);
-extern	char *  get_cmd_alias           (char *name, int *howmany, 
-					 char **complete_name, void **args);
 extern	char ** get_subarray_elements   (char *root, int *howmany, int type);
 
 
@@ -844,7 +843,6 @@ void	prepare_alias_call (void *al, char **stuff)
 /**************************** INTERMEDIATE INTERFACE *********************/
 static	namespace_t *extract_namespace(char **name);
 static	Alias *	find_variable     (char *name, int local);
-static	Alias *	find_cmd_alias     (char *name);
 static	Alias *	find_local_var   (char *name, RuntimeStack **frame);
 
 /* this function extracts the namespace portion from a string.  it returns
@@ -1151,44 +1149,43 @@ static Alias *	find_variable (char *name, int local) {
 	return item;
 }
 
-static Alias *	find_cmd_alias (char *name)
-{
-	Alias * item = NULL;
-	char *save = name;
-	namespace_t *nsp;
+static Alias *find_cmd_alias (char *name) {
+    Alias * item = NULL;
+    char *save = name;
+    namespace_t *nsp;
 
-	if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE) {
-	    name = save;
-	    nsp = namespaces.root;
-	} else if (nsp == NULL)
-	    return NULL;
+    if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE) {
+	name = save;
+	nsp = namespaces.root;
+    } else if (nsp == NULL)
+	return NULL;
 
-	if ((item = hash_find(nsp->ftable, name)) == NULL)
-	    return NULL; /* no luck */
+    if ((item = hash_find(nsp->ftable, name)) == NULL)
+	return NULL; /* no luck */
 
-	/* otherwise, we have to see if it is stubbed.  if it is, we need to
-	 * load the file it's stubbed in, and then try again. */
-	if (item->stub != NULL) {
-		char *file;
+    /* otherwise, we have to see if it is stubbed.  if it is, we need to
+     * load the file it's stubbed in, and then try again. */
+    if (item->stub != NULL) {
+	char *file;
 
-		file = LOCAL_COPY(item->stub);
-		delete_cmd_alias(item->name, 0);
+	file = LOCAL_COPY(item->stub);
+	delete_cmd_alias(item->name, 0);
 
-		if (!unstub_in_progress) {
-			unstub_in_progress = 1;
-			load("LOAD", file, empty_string);
-			unstub_in_progress = 0;
-		}
-
-		/* At this point, we have to see if 'item' was
-		 * redefined by the /load.  We call find_cmd_alias 
-		 * recursively to pick up the new value */
-		return find_cmd_alias(save);
+	if (!unstub_in_progress) {
+	    unstub_in_progress = 1;
+	    load("LOAD", file, empty_string);
+	    unstub_in_progress = 0;
 	}
 
-	if (item->stuff == NULL)
-		panic("item->stuff is NULL and it shouldn't be.");
-	return item;
+	/* At this point, we have to see if 'item' was
+	 * redefined by the /load.  We call find_cmd_alias 
+	 * recursively to pick up the new value */
+	return find_cmd_alias(save);
+    }
+
+    if (item->stuff == NULL)
+	panic("item->stuff is NULL and it shouldn't be.");
+    return item;
 }
 
 
@@ -1542,19 +1539,55 @@ char	*get_variable_with_args (const char *str, const char *args, int *args_flag)
 	return (copy ? m_strdup(ret) : ret);
 }
 
-char *	get_cmd_alias (char *name, int *howmany, char **complete_name, void **args)
-{
-	Alias *item;
+/*
+ * This function finds the alias with the given name and returns the actual
+ * guts of the alias (if it is found) or NULL.  If args is non-NULL it
+ * stores the address of the alias' arglist in it.
+ */
+char *get_cmd_alias(char *name, void **args) {
+    Alias *item = find_cmd_alias(name);
 
-	if ((item = find_cmd_alias(name)) != NULL) {
+    if (item != NULL)  {
+	if (args != NULL)
+	    *args = (void *)item->arglist;
+	return item->stuff;
+    }
+    return NULL;
+}
+
+/*
+ * This function will try to 'complete' a command alias with the given name.
+ * It looks for all the aliases in the current namespace (should normally be
+ * the root space, but...) with 'name' as the beginning component of their
+ * name.  If it finds an exact match, it stores the value -1 in howmany.  If
+ * there were no matches then 0 is stored.  If there were non-exact matches
+ * it stores the number available.  If one exact or non-exact match is found
+ * then that name is returned.  Otherwise, NULL is returned.
+ */
+char *complete_cmd_alias(const char *name, int *howmany) {
+    Alias *item;
+    int len = strlen(name);
+    char *ret = NULL;
+
+    *howmany = 0;
+
+    LIST_FOREACH(item, &namespaces.current->flist, lp) {
+	if (!strncasecmp(item->name, name, len)) {
+	    /* a match.. see what sort it is.. */
+	    if (strlen(item->name) == len) {
+		/* an exact match.  set howmany, set complete_name, then go
+		 * home. */
 		*howmany = -1;
-		if (complete_name)
-			malloc_strcpy(complete_name, item->name);
-		if (args)
-			*args = (void *)item->arglist;
-		return item->stuff;
+		return item->name;
+	    }
+	    *howmany++;
+	    ret = item->name;
 	}
-	*howmany = 0;
+    }
+
+    if (*howmany == 1)
+	return ret;
+    else
 	return NULL;
 }
 
@@ -1748,7 +1781,7 @@ char **	get_subarray_elements (char *root, int *howmany, int type)
 
 
 /* XXX What is this doing here? */
-static char *	parse_line_alias_special (char *name, char *what, char *args, int d1, int d2, void *arglist, int function)
+static char *	parse_line_alias_special (char *name, char *what, char *args, int d1, void *arglist, int function)
 {
 	int	old_window_display = window_display;
 	int	old_last_function_call_level = last_function_call_level;
@@ -1765,7 +1798,7 @@ static char *	parse_line_alias_special (char *name, char *what, char *args, int 
 	window_display = old_window_display;
 
 	will_catch_return_exceptions++;
-	parse_line(NULL, what, args, d1, d2);
+	parse_line(NULL, what, args, d1);
 	will_catch_return_exceptions--;
 	return_exception = 0;
 
@@ -1778,9 +1811,9 @@ static char *	parse_line_alias_special (char *name, char *what, char *args, int 
 	return result;
 }
 
-char *	parse_line_with_return (char *name, char *what, char *args, int d1, int d2)
+char *	parse_line_with_return (char *name, char *what, char *args, int d1)
 {
-	return parse_line_alias_special(name, what, args, d1, d2, NULL, 1);
+	return parse_line_alias_special(name, what, args, d1, NULL, 1);
 }
 
 /************************************************************************/
@@ -1793,19 +1826,16 @@ char *	parse_line_with_return (char *name, char *what, char *args, int d1, int d
  */
 char 	*call_user_function	(char *alias_name, char *args)
 {
+	Alias *alias;
 	char 	*result = NULL;
-	char 	*sub_buffer;
-	int 	cnt;
-	void	*arglist = NULL;
 
-	sub_buffer = get_cmd_alias(alias_name, &cnt, NULL, &arglist);
-	if (cnt < 0)
-		result = parse_line_alias_special(alias_name, sub_buffer, 
-						args, 0, 1, arglist, 1);
+	if ((alias = find_cmd_alias(alias_name)) != NULL)
+	    result = parse_line_alias_special(alias_name, alias->stuff,
+		    args, 1, alias->arglist, 1);
 	else if (x_debug & DEBUG_UNKNOWN)
-		yell("Function call to non-existant alias [%s]", alias_name);
+	    yell("Function call to non-existant alias [%s]", alias_name);
 
-	if (!result)
+	if (result == NULL)
 		result = m_strdup(empty_string);
 
 	return result;
@@ -1815,7 +1845,7 @@ char 	*call_user_function	(char *alias_name, char *args)
 void	call_user_alias	(char *alias_name, char *alias_stuff, char *args, void *arglist)
 {
 	parse_line_alias_special(alias_name, alias_stuff, args, 
-					0, 1, arglist, 0);
+					1, arglist, 0);
 }
 
 
@@ -1909,7 +1939,7 @@ void 	make_local_stack 	(const char *name)
 	if (call_stack[wind_index].vtable == NULL)
 	    call_stack[wind_index].vtable = create_hash_table(4,
 		    sizeof(Alias), NAMESPACE_HASH_SANITYLEN,
-		    HASH_FL_NOCASE | HASH_FL_STRING, strcasecmp);
+		    HASH_FL_NOCASE | HASH_FL_STRING, (hash_cmpfunc)strcasecmp);
 	else
 	    if (!LIST_EMPTY(call_stack[wind_index].vlist))
 		yell("make_local_stack(): stack frame list is non-empty!");

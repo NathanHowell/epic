@@ -1,4 +1,4 @@
-/* $EPIC: keys.c,v 1.16.2.2 2003/03/24 17:53:01 wd Exp $ */
+/* $EPIC: keys.c,v 1.16.2.3 2003/03/26 09:20:46 wd Exp $ */
 /*
  * keys.c:  Keeps track of what happens whe you press a key.
  *
@@ -236,7 +236,7 @@ void key_exec (struct Key *key) {
 	char *exec = m_strdup(key->bound->alias);
 	if (key->stuff)
 	    m_s3cat(&exec, " ", key->stuff);
-	parse_line(NULL, exec, empty_string, 0, 0);
+	parse_line(NULL, exec, empty_string, 0);
 	new_free(&exec);
     } else if (key->bound->func != NULL)
 	key->bound->func(key->val, key->stuff);

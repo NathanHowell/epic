@@ -1,4 +1,4 @@
-/* $EPIC: history.c,v 1.6.2.2 2003/03/24 17:53:01 wd Exp $ */
+/* $EPIC: history.c,v 1.6.2.3 2003/03/26 09:20:46 wd Exp $ */
 /*
  * history.c: stuff to handle command line history 
  *
@@ -115,7 +115,7 @@ void	shove_to_history (char unused, char *not_used)
  * array is a circular buffer, and add_to_history handles all that stuff. It
  * automagically allocted and deallocated memory as needed 
  */
-void	add_to_history (char *line)
+void	add_to_history (const char *line)
 {
 	History *new_h;
 

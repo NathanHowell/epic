@@ -1,4 +1,4 @@
-/* $EPIC: queue.c,v 1.9 2002/10/18 21:10:23 jnelson Exp $ */
+/* $EPIC: queue.c,v 1.9.2.1 2003/03/26 09:20:46 wd Exp $ */
 /*
  *  queue.c - The queue command
  *
@@ -348,7 +348,7 @@ static void	run_queue (Queue **list, const char *name)
 	for (c = q->first; c; c = c->next)
 	{
 	    if (c->what)
-		parse_line("QUEUE", c->what, c->subargs, 0, 0);
+		parse_line("QUEUE", c->what, c->subargs, 0);
 	}
 }
 

@@ -1,4 +1,4 @@
-/* $EPIC: input.c,v 1.7.2.2 2003/03/24 17:53:01 wd Exp $ */
+/* $EPIC: input.c,v 1.7.2.3 2003/03/26 09:20:46 wd Exp $ */
 /*
  * input.c: does the actual input line stuff... keeps the appropriate stuff
  * on the input line, handles insert/delete of characters/words... the whole
@@ -1151,12 +1151,7 @@ BUILT_IN_BINDING(send_line)
 		update_input(UPDATE_ALL);
 
 		if (do_hook(INPUT_LIST, "%s", line))
-		{
-			if (get_int_var(INPUT_ALIASES_VAR))
-				parse_line(NULL, line, empty_string, 1, 0);
-			else
-				parse_line(NULL, line, NULL, 1, 0);
-		}
+			parse_input(line);
 	}
 
 	from_server = server;
@@ -1230,7 +1225,7 @@ BUILT_IN_BINDING(input_unclear_screen)
 /* parse_text: the bindable function that executes its string */
 BUILT_IN_BINDING(parse_text)
 {
-	parse_line(NULL, string, empty_string, 0, 0);
+	parse_line(NULL, string, empty_string, 0);
 }
 
 BUILT_IN_BINDING(cpu_saver_on)

@@ -1,4 +1,4 @@
-/* $EPIC: expr.c,v 1.9.2.2 2003/03/24 17:53:00 wd Exp $ */
+/* $EPIC: expr.c,v 1.9.2.3 2003/03/26 09:20:46 wd Exp $ */
 /*
  * expr.c -- The expression mode parser and the textual mode parser
  * #included by alias.c -- DO NOT DELETE
@@ -435,7 +435,7 @@ static	char	*next_unit (char *str, const char *args, int *arg_flag, int stage)
 			window_display = display;
 
 			will_catch_return_exceptions++;
-			parse_line(NULL, ptr, args, 0, 1);
+			parse_line(NULL, ptr, args, 1);
 			will_catch_return_exceptions--;
 			return_exception = 0;
 

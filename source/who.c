@@ -1,4 +1,4 @@
-/* $EPIC: who.c,v 1.12.2.2 2003/03/24 17:53:02 wd Exp $ */
+/* $EPIC: who.c,v 1.12.2.3 2003/03/26 09:20:46 wd Exp $ */
 /*
  * who.c -- The WHO queue.  The ISON queue.  The USERHOST queue.
  *
@@ -595,7 +595,7 @@ do
 				nick, stat, user, host, server, name);
 
 		if (new_w->who_stuff)
-			parse_line(NULL, new_w->who_stuff, buffer, 0, 0);
+			parse_line(NULL, new_w->who_stuff, buffer, 0);
 
 		else if (do_hook(WHO_LIST, "%s", buffer))
 		{
@@ -662,7 +662,7 @@ void	who_end (int refnum, const char *from, const char *comm, const char **ArgLi
 		{
 			snprintf(buffer, 1024, "%s %s", from, ArgList[0]);
 			if (new_w->who_end)
-			    parse_line(NULL, new_w->who_end, buffer, 0, 0);
+			    parse_line(NULL, new_w->who_end, buffer, 0);
 
 			else if (get_int_var(SHOW_END_OF_MSGS_VAR))
 			    if (do_hook(current_numeric, "%s", buffer))
@@ -738,7 +738,7 @@ int	fake_who_end (int refnum, const char *from, const char *comm, const char *wh
 
 		    snprintf(buffer, 1024, "%s %s", 
 				from, new_w->who_target);
-		    parse_line(NULL, new_w->who_end, buffer, 0, 0);
+		    parse_line(NULL, new_w->who_end, buffer, 0);
 		}
 	} 
 	while (new_w->piggyback && (new_w = new_w->next));
@@ -1286,7 +1286,7 @@ void	userhost_cmd_returned (int refnum, UserhostItem *stuff, const char *nick, c
 	malloc_strcat_c(&args, stuff->user ? stuff->user : empty_string, &clue);
 	malloc_strcat_c(&args, space, &clue);
 	malloc_strcat_c(&args, stuff->host ? stuff->host : empty_string, &clue);
-	parse_line(NULL, text, args, 0, 0);
+	parse_line(NULL, text, args, 0);
 
 	new_free(&args);
 }

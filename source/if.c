@@ -1,4 +1,4 @@
-/* $EPIC: if.c,v 1.14.2.3 2003/03/24 17:53:01 wd Exp $ */
+/* $EPIC: if.c,v 1.14.2.4 2003/03/26 09:20:46 wd Exp $ */
 /*
  * if.c: the IF, WHILE, FOREACH, DO, FE, FEC, and FOR commands for IRCII 
  *
@@ -200,7 +200,7 @@ BUILT_IN_COMMAND(ifcmd)
 		}
 
 		if (current_line)
-			parse_line(NULL, current_line, subargs, 0, 0);
+			parse_line(NULL, current_line, subargs, 0);
 
 		break;
 	}
@@ -234,7 +234,7 @@ BUILT_IN_COMMAND(docmd)
 			will_catch_continue_exceptions++;
 			while (1)
 			{
-				parse_line ((char *) 0, body, subargs ? subargs : empty_string, 0, 0);
+				parse_line ((char *) 0, body, subargs ? subargs : empty_string, 0);
 				if (break_exception)
 				{
 					break_exception = 0;
@@ -263,10 +263,10 @@ BUILT_IN_COMMAND(docmd)
 			return;
 		}
 		/* falls through to here if its /do {...} */
-		parse_line ((char *) 0, body, subargs ? subargs : empty_string, 0, 0);
+		parse_line ((char *) 0, body, subargs ? subargs : empty_string,  0);
 	}
 	/* falls through to here if it its /do ... */
-	parse_line ((char *) 0, args, subargs ? subargs : empty_string, 0, 0);
+	parse_line ((char *) 0, args, subargs ? subargs : empty_string, 0);
 }
 
 BUILT_IN_COMMAND(whilecmd)
@@ -301,7 +301,7 @@ BUILT_IN_COMMAND(whilecmd)
 
 		new_free(&ptr);
 
-		parse_line((char *) 0, body, subargs ?  subargs : empty_string, 0, 0);
+		parse_line((char *) 0, body, subargs ?  subargs : empty_string, 0);
 		if (continue_exception)
 		{
 			continue_exception = 0;
@@ -380,7 +380,7 @@ BUILT_IN_COMMAND(foreach)
 		add_local_var(var, sublist[i] + slen + 1, 0);
 		new_free(&sublist[i]);
 
-		parse_line(NULL, body, subargs ? subargs : empty_string, 0, 0);
+		parse_line(NULL, body, subargs ? subargs : empty_string, 0);
 	
 		if (continue_exception)
 		{
@@ -508,7 +508,7 @@ BUILT_IN_COMMAND(fe)
 		}
 		x += ind;
 		parse_line((char *) 0, todo, 
-		    subargs?subargs:empty_string, 0, 0);
+		    subargs ? subargs : empty_string, 0);
 
 		if (mapvar)
 			for ( y = 0 ; y < ind ; y++ ) {
@@ -577,7 +577,7 @@ void	for_next_cmd (int argc, char **argv, const char *subargs)
 	{
 		snprintf(istr, 255, "%d", i);
 		add_local_var(var, istr, 0);
-		parse_line(NULL, cmds, subargs, 0, 0);
+		parse_line(NULL, cmds, subargs, 0);
 
 		if (break_exception)
 		{
@@ -619,7 +619,7 @@ void	for_fe_cmd (int argc, char **argv, const char *subargs)
 	{
 		next = new_next_arg(real_list, &real_list);
 		add_local_var(var, next, 0);
-		parse_line(NULL, cmds, subargs, 0, 0);
+		parse_line(NULL, cmds, subargs, 0);
 
 		if (break_exception) {
 			break_exception = 0;
@@ -736,7 +736,7 @@ BUILT_IN_COMMAND(forcmd)
 	commands = LOCAL_COPY(working);
 
 	sa = subargs ? subargs : empty_string;
-	parse_line((char *) 0, commence, sa, 0, 0);
+	parse_line((char *) 0, commence, sa, 0);
 
 	will_catch_break_exceptions++;
 	will_catch_continue_exceptions++;
@@ -752,7 +752,7 @@ BUILT_IN_COMMAND(forcmd)
 		}
 
 		new_free(&blah);
-		parse_line((char *) 0, commands, sa, 0, 0);
+		parse_line((char *) 0, commands, sa, 0);
 		if (break_exception)
 		{
 			break_exception = 0;
@@ -763,7 +763,7 @@ BUILT_IN_COMMAND(forcmd)
 		if (return_exception)
 			break;
 
-		parse_line((char *) 0, iteration, sa, 0, 0);
+		parse_line((char *) 0, iteration, sa, 0);
 	}
 	will_catch_break_exceptions--;
 	will_catch_continue_exceptions--;
@@ -865,7 +865,7 @@ BUILT_IN_COMMAND(switchcmd)
 		if (hooked)
 		{
 			will_catch_break_exceptions++;
-			parse_line(NULL, commands, subargs, 0, 0);
+			parse_line(NULL, commands, subargs, 0);
 			if (break_exception)
 				break_exception = 0;
 			will_catch_break_exceptions--;
@@ -917,7 +917,7 @@ BUILT_IN_COMMAND(repeatcmd)
 
 	/* Probably want to catch break and continue here */
 	while (value--)
-		parse_line(NULL, args, subargs ? subargs : empty_string, 0, 0);
+		parse_line(NULL, args, subargs ? subargs : empty_string, 0);
 
 	return;
 }

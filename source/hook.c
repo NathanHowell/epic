@@ -1,4 +1,4 @@
-/* $EPIC: hook.c,v 1.13.2.2 2003/03/24 17:53:01 wd Exp $ */
+/* $EPIC: hook.c,v 1.13.2.3 2003/03/26 09:20:46 wd Exp $ */
 /*
  * hook.c: Does those naughty hook functions. 
  *
@@ -894,7 +894,7 @@ int 	do_hook (int which, char *format, ...)
 		if (retval == RESULT_PENDING)
 		{
 			result = parse_line_with_return(name_copy, 
-						stuff_copy, buffer, 0, 0);
+						stuff_copy, buffer, 0);
 
 			if (result && atol(result))
 				retval = SUPPRESS_DEFAULT;
@@ -912,7 +912,7 @@ int 	do_hook (int which, char *format, ...)
 			 * after this point.
 			 */
 			will_catch_return_exceptions++;
-			parse_line(name_copy, stuff_copy, buffer, 0, 0);
+			parse_line(name_copy, stuff_copy, buffer, 0);
 			will_catch_return_exceptions--;
 			return_exception = 0;
 		}

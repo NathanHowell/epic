@@ -1,4 +1,4 @@
-/* $EPIC: namespace.c,v 1.1.2.5 2003/03/25 13:16:53 wd Exp $ */
+/* $EPIC: namespace.c,v 1.1.2.6 2003/03/26 09:20:46 wd Exp $ */
 /*
  * namespace.c: Namespace tracking system.
  *
@@ -84,10 +84,10 @@ namespace_t *namespace_create(char *name) {
 	LIST_INSERT_HEAD(&nsp->parent->children, nsp, lp);
     nsp->ftable = create_hash_table(16, sizeof(Alias),
 	    NAMESPACE_HASH_SANITYLEN, HASH_FL_NOCASE | HASH_FL_STRING,
-	    strcasecmp);
+	    (hash_cmpfunc)strcasecmp);
     nsp->vtable = create_hash_table(16, sizeof(Alias),
 	    NAMESPACE_HASH_SANITYLEN, HASH_FL_NOCASE | HASH_FL_STRING,
-	    strcasecmp);
+	    (hash_cmpfunc)strcasecmp);
 
     return nsp;
 }

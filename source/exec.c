@@ -1,4 +1,4 @@
-/* $EPIC: exec.c,v 1.10.2.2 2003/03/24 17:53:00 wd Exp $ */
+/* $EPIC: exec.c,v 1.10.2.3 2003/03/26 09:20:46 wd Exp $ */
 /*
  * exec.c: handles exec'd process for IRCII 
  *
@@ -769,10 +769,10 @@ static void 	handle_filedesc (Process *proc, int *fd, int hook_nonl, int hook_nl
 
 			     if (hook_nl == EXEC_LIST && proc->stdoutpc)
 				parse_line("EXEC", proc->stdoutpc, 
-						exec_buffer, 0, 0);
+						exec_buffer, 0);
 			else if (hook_nl == EXEC_ERRORS_LIST && proc->stderrpc)
 				parse_line("EXEC", proc->stderrpc, 
-						exec_buffer, 0, 0);
+						exec_buffer, 0);
 			else if (proc->logical)
 				do_hook(hook_nonl, "%s %s", 
 					proc->logical, exec_buffer);
@@ -806,10 +806,10 @@ this_sucks:
 
 			     if (hook_nl == EXEC_LIST && proc->stdoutc)
 				parse_line("EXEC", proc->stdoutc, 
-						exec_buffer, 0, 0);
+						exec_buffer, 0);
 			else if (hook_nl == EXEC_ERRORS_LIST && proc->stderrc)
 				parse_line("EXEC", proc->stderrc, 
-						exec_buffer, 0, 0);
+						exec_buffer, 0);
 			else if (proc->logical)
 			{
 				if ((do_hook(hook_nl, "%s %s", 
@@ -1075,7 +1075,7 @@ static void 	cleanup_dead_processes (void)
 		while ((cmd = next))
 		{
 			next = cmd->next;
-			parse_line(NULL, cmd->name, exit_info, 0, 0);
+			parse_line(NULL, cmd->name, exit_info, 0);
 			new_free(&cmd->name);
 			new_free((char **)&cmd);
 		}

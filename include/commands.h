@@ -29,7 +29,8 @@ extern	int	return_exception;
 extern	int	need_defered_commands;
 
 	void	ExecuteTimers		(void);
-	void	parse_line 		(const char *, const char *, const char *, int, int);
+	void	parse_line 		(const char *, const char *, const char *, int);
+	void	parse_input		(const char *);
 	BUILT_IN_COMMAND(load);
 	void	send_text	 	(const char *, const char *, const char *, int);
 	int	redirect_text		(int, const char *, const char *, char *, int);

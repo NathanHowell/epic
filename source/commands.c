@@ -1,4 +1,4 @@
-/* $EPIC: commands.c,v 1.44.2.4 2003/03/25 13:16:53 wd Exp $ */
+/* $EPIC: commands.c,v 1.44.2.5 2003/03/26 09:20:46 wd Exp $ */
 /*
  * commands.c -- Stuff needed to execute commands in ircII.
  *		 Includes the bulk of the built in commands for ircII.
@@ -181,7 +181,7 @@ static	void	allocdumpcmd	(const char *, char *, const char *);
 
 /* other */
 static	void	eval_inputlist 	(char *, char *);
-static	int	parse_command	(const char *, int, const char *);
+static	int	parse_command	(const char *, const char *);
 
 /* I hate typedefs, but they sure can be useful.. */
 typedef void (*CmdFunc) (const char *, char *, const char *);
@@ -578,7 +578,7 @@ void	do_defered_commands (void)
 		make_window_current_by_refnum(get_winref_by_servref(from_server));
 
 		parse_line("deferred", defer_list[i].cmds, 
-				       defer_list[i].subargs, 0, 0);
+				       defer_list[i].subargs, 0);
 		new_free(&defer_list[i].cmds);
 		new_free(&defer_list[i].subargs);
 	    }
@@ -1159,7 +1159,7 @@ BUILT_IN_COMMAND(xevalcmd)
 		}
 	}
 
-	parse_line(NULL, args, subargs ? subargs : empty_string, 0, 0);
+	parse_line(NULL, args, subargs ? subargs : empty_string, 0);
 
 	to_window = old_to_window;
 	make_window_current_by_refnum(old_refnum);
@@ -1168,7 +1168,7 @@ BUILT_IN_COMMAND(xevalcmd)
 
 BUILT_IN_COMMAND(evalcmd)
 {
-	parse_line(NULL, args, subargs ? subargs : empty_string, 0, 0);
+	parse_line(NULL, args, subargs ? subargs : empty_string, 0);
 }
 
 /* flush: flushes all pending stuff coming from the server */
@@ -1755,7 +1755,7 @@ static void	loader_std (FILE *fp, const char *filename, char *subargs, struct lo
 			else
 			    defargs = NULL;
 
-			parse_line(NULL, current_row, defargs, 0, 0);
+			parse_line(NULL, current_row, defargs, 0);
 			new_free(&current_row);
 		    }
 		    else if (!in_comment)
@@ -1829,7 +1829,7 @@ static void	loader_std (FILE *fp, const char *filename, char *subargs, struct lo
 				    else
 					defargs = NULL;
 
-				    parse_line(NULL, current_row, defargs, 0,0);
+				    parse_line(NULL, current_row, defargs, 0);
 				    new_free(&current_row);
 				}
 
@@ -1964,7 +1964,7 @@ static void	loader_std (FILE *fp, const char *filename, char *subargs, struct lo
 			    else
 				defargs = NULL;
 			
-			    parse_line(NULL, current_row, defargs, 0, 0);
+			    parse_line(NULL, current_row, defargs, 0);
 			    new_free(&current_row);
 			}
 			else if (ptr[1] == 0 && paste_level)
@@ -2005,7 +2005,7 @@ static void	loader_std (FILE *fp, const char *filename, char *subargs, struct lo
 		else
 		    defargs = NULL;
 
-		parse_line(NULL, current_row, defargs, 0, 0);
+		parse_line(NULL, current_row, defargs, 0);
 	    }
 
 	    new_free(&current_row);
@@ -2071,7 +2071,7 @@ static void	loader_pf (FILE *fp, const char *filename, char *subargs, struct loa
 	buffer[pos] = 0;
 	if (subargs == NULL)
 	    subargs = empty_string;
-	parse_line(NULL, buffer, subargs, 0, 0);
+	parse_line(NULL, buffer, subargs, 0);
 }
 
 /*
@@ -2342,7 +2342,7 @@ BUILT_IN_COMMAND(redirect)
 	 */
 	set_server_redirect(from_server, who);
 	set_server_sent(from_server, 0);
-	parse_line(NULL, args, subargs ? subargs : NULL, 0, 0);
+	parse_line(NULL, args, subargs ? subargs : NULL, 0);
 
 	/*
 	 * If we've queried the server, then we wait for it to
@@ -2549,7 +2549,7 @@ BUILT_IN_COMMAND(sendlinecmd)
 	server = from_server;
 	display = window_display;
 	window_display = 1;
-	parse_line(NULL, args, get_int_var(INPUT_ALIASES_VAR) ? empty_string : NULL, 1, 0);
+	parse_input(args);
 	update_input(UPDATE_ALL);
 	window_display = display;
 	from_server = server;
@@ -2723,7 +2723,7 @@ BUILT_IN_COMMAND(waitcmd)
 	{
 		set_server_sent(from_server, 0);
 		lock_stack_frame();
-		parse_line(NULL, args, subargs, 0, 0);
+		parse_line(NULL, args, subargs, 0);
 		unlock_stack_frame();
 		if (get_server_sent(from_server))
 			server_hard_wait(from_server);
@@ -3020,7 +3020,7 @@ struct target_type target[4] =
 	    else if (*current_nick == '/')
 	    {
 		line = m_opendup(current_nick, " ", text, NULL);
-		parse_command(line, 0, empty_string);
+		parse_line(NULL, line, empty_string, 0);
 		new_free(&line);
 	    }
 	    else if (*current_nick == '=')
@@ -3128,7 +3128,7 @@ struct target_type target[4] =
 	 * get munched if window_display is 0.
 	 */
 	if (hook && get_server_away(from_server) && get_int_var(AUTO_UNMARK_AWAY_VAR))
-		parse_line(NULL, "AWAY", empty_string, 0, 0);
+		parse_line(NULL, "AWAY", empty_string, 0);
 
 	window_display = old_window_display;
 	recursion--;
@@ -3142,7 +3142,7 @@ struct target_type target[4] =
  */
 static void	eval_inputlist (char *args, char *line)
 {
-	parse_line(NULL, args, line ? line : empty_string, 0, 0);
+	parse_line(NULL, args, line ? line : empty_string, 0);
 }
 
 GET_FIXED_ARRAY_NAMES_FUNCTION(get_command, irc_command)
@@ -3289,6 +3289,38 @@ BUILT_IN_COMMAND(e_call)
 }
 
 
+/*
+ * This function examines the data in *line for command characters.  It will
+ * accept up to two '/' chars (or two of whatever is in CMDCHARS) and one ^
+ * char to turn off noise.  It stores the beginning of the command in line,
+ * and returns the number of command characters used.  We also store the
+ * 'noise' status in noisy.
+ */
+static int eat_cmd_chars(const char **line, int *noisy) {
+    char *cmdchars;
+    const char *s = *line;
+    int used = 0;
+
+    if ((cmdchars = get_string_var(CMDCHARS_VAR)) == NULL)
+	cmdchars = DEFAULT_CMDCHARS;
+
+    *noisy = 1;
+    while (*s != '\0') {
+	if (*s == '^')
+	    *noisy = 0;
+	else if (*s == '/' || strchr(cmdchars, *s)) {
+	    if (++used == 2) {
+		s++;
+		break;
+	    }
+	} else
+	    break;
+	s++;
+    }
+
+    *line = s;
+    return used;
+}
 
 /* 
  * parse_line: This is the main parsing routine.  It should be called in
@@ -3314,7 +3346,8 @@ BUILT_IN_COMMAND(e_call)
  * Im sure that i did a hideously bletcherous job that needs to be cleaned up.
  * So just be forewarned about the damage.
  */
-void	parse_line (const char *name, const char *org_line, const char *args, int hist_flag, int append_flag)
+void	parse_line (const char *name, const char *org_line, const char *args,
+	int append_flag)
 {
 	char	*line = NULL,
 		*stuff,
@@ -3323,6 +3356,13 @@ void	parse_line (const char *name, const char *org_line, const char *args, int h
 	int	args_flag = 0;
 	int	die = 0;
 
+	if (org_line == NULL)
+		panic("org_line is NULL and it shouldn't be.");
+	else if (*org_line == '\0') {
+	    say("parse_line got blank line.  hrm.");
+	    return; /* this shouldn't happen any more.. */
+	}
+
 	/*
 	 * If this is an atomic scope, then we create a new local variable
 	 * stack.  Otherwise, this command will use someone else's stack.
@@ -3330,20 +3370,10 @@ void	parse_line (const char *name, const char *org_line, const char *args, int h
 	if (name)
 		make_local_stack(name);
 
-	if (!org_line)
-		panic("org_line is NULL and it shouldn't be.");
-
 	/*
 	 * We will be mangling 'org_line', so we make a copy to work with.
 	 */
 	line = LOCAL_COPY(org_line);
-
-	/*
-	 * If the user outputs the "empty command", then output a blank
-	 * line to their current target.  This is useful for pastes.
-	 */
-	if (!*org_line)
-		send_text(get_target_by_refnum(0), empty_string, NULL, 1);
 
 	/*
 	 * Otherwise, if the command has arguments, then:
@@ -3351,8 +3381,7 @@ void	parse_line (const char *name, const char *org_line, const char *args, int h
 	 *	* It is being /LOADed while /set input_aliases ON
 	 *	* It is typed at the input prompt while /set input_aliases ON
 	 */
-	else if (args) 
-	{
+	if (args != NULL) {
 	    do 
             {
 		/*
@@ -3379,7 +3408,7 @@ void	parse_line (const char *name, const char *org_line, const char *args, int h
 		    }
 
 		    /* I'm fairly sure the first arg ought not be 'name' */
-		    parse_line(NULL, stuff, args, hist_flag, append_flag);
+		    parse_line(NULL, stuff, args, append_flag);
 
 		    /*
 		     * Check to see if an exception has been thrown.  If it
@@ -3447,7 +3476,7 @@ void	parse_line (const char *name, const char *org_line, const char *args, int h
 		/*
 		 * Now we run the command.
 		 */
-		parse_command(stuff, hist_flag, args);
+		parse_command(stuff, args);
 
 		/*
 		 * And clean up after ourselves
@@ -3475,46 +3504,11 @@ void	parse_line (const char *name, const char *org_line, const char *args, int h
 	 * Otherwise, If it is being /LOADed, just parse it directly.
 	 */
         else if (load_depth != -1)
-		parse_command(line, hist_flag, args);
+		parse_command(line, args);
 
-	/*
-	 * Otherwise its a command being run by the user in direct mode
-	 * and /SET INPUT_ALIASES is OFF.
-	 */
+	/* this shouldn't happen any more.. */
 	else
-	{
-	    /*
-	     * This handling is strictly for backwards compatability.
-	     * It used to be possible to insert literal newlines in
-	     * the text in the input prompt via some tomfoolery, but
-	     * this does not really happen much to speak of any more.
-	     * Nevertheless, I'm sure there is someone out there who 
-	     * depends on this working, so don't take it out. ;-)
-	     */
-	    while ((s = line))
-	    {
-		/*
-		 * Find a newline, if any
-		 */
-		if ((t = sindex(line, "\r\n")))
-		{
-			*t++ = 0;
-			line = t;
-		}
-		else
-			line = NULL;
-
-		/*
-		 * Run the command (args is NULL, remember)
-		 */
-		parse_command(s, hist_flag, args);
-
-		if ((will_catch_break_exceptions && break_exception) ||
-		    (will_catch_return_exceptions && return_exception) ||
-		    (will_catch_continue_exceptions && continue_exception))
-			break;
-	    }
-	}
+	    yell("parse_line called without args outsied of load");
 
 	/*
 	 * If we're an atomic scope, blow away our local variable stack.
@@ -3547,17 +3541,15 @@ void	parse_line (const char *name, const char *org_line, const char *args, int h
  *
  * Everyone else must call parse_line.  No exceptions.
  */
-int	parse_command (const char *line, int hist_flag, const char *sub_args)
+int	parse_command (const char *line, const char *sub_args)
 {
 static	unsigned 	level = 0;
 	unsigned 	display;
 	int		old_display_var;
-	char *		cmdchars;
 	const char *	com;
 	int		args_flag,
-			add_to_hist,
 			cmdchar_used = 0;
-	int		noisy = 1;
+	int		noisy;
 	char *		this_cmd = NULL;
 
 	if (!line || !*line) 
@@ -3566,63 +3558,19 @@ static	unsigned 	level = 0;
 	if (get_int_var(DEBUG_VAR) & DEBUG_COMMANDS)
 		yell("Executing [%d] %s", level, line);
 	level++;
-	if (!(cmdchars = get_string_var(CMDCHARS_VAR)))
-		cmdchars = DEFAULT_CMDCHARS;
 
 	this_cmd = LOCAL_COPY(line);
 	set_current_command(this_cmd);
-	add_to_hist = 1;
 	display = window_display;
 	old_display_var = get_int_var(DISPLAY_VAR);
 
-	/* 
-	 * Once and for all i hope i fixed this.  What does this do?
-	 * well, at the beginning of your input line, it looks to see
-	 * if youve used any ^s or /s.  You can use up to one ^ and up
-	 * to two /s.  When any character is found that is not one of
-	 * these characters, it stops looking.
-	 */
-	for (; *line; line++)
-	{
-		/* Fix to allow you to do ^foo at the input line. */
-		if (*line == '^' && (!hist_flag || cmdchar_used))
-		{
-			if (!noisy)
-				break;
-			noisy = 0;
-		}
-		else if ((!hist_flag && *line == '/') || strchr(cmdchars, *line))
-		{
-			cmdchar_used++;
-			if (cmdchar_used > 2)
-				break;
-		}
-		else
-			break;
-	}
+	cmdchar_used = eat_cmd_chars(&line, &noisy);
 
 	if (!noisy)
 		window_display = 0;
 	com = line;
 
-	/*
-	 * always consider input a command unless we are in interactive mode
-	 * and command_mode is off.   -lynx
-	 */
-	if (hist_flag && !cmdchar_used && !get_int_var(COMMAND_MODE_VAR))
-	{
-		send_text(get_target_by_refnum(0), line, NULL, 1);
-		if (hist_flag && add_to_hist)
-			add_to_history(this_cmd);
-		/* Special handling for ' and : */
-	}
-	else if (*com == '\'' && get_int_var(COMMAND_MODE_VAR))
-	{
-		send_text(get_target_by_refnum(0), line + 1, NULL, 1);
-		if (hist_flag && add_to_hist)
-			add_to_history(this_cmd);
-	}
-	else if ((*com == '@') || (*com == '('))
+	if ((*com == '@') || (*com == '('))
 	{
 		/* This kludge fixes a memory leak */
 		char *		tmp;
@@ -3646,18 +3594,11 @@ static	unsigned 	level = 0;
 
 		if ((tmp = parse_inline(my_line + 1, sub_args, &args_flag)))
 			new_free(&tmp);
-
-		if (hist_flag && add_to_hist)
-			add_to_history(this_cmd);
-	}
-	else
-	{
+	} else {
 		char		*rest,
-				*alias = NULL,
-				*alias_name = NULL;
+				*alias = NULL;
 		char		*cline;
-		int		cmd_cnt,
-				alias_cnt = 0;
+		int		cmd_cnt;
 		IrcCommand	*command;
 		void		*arglist = NULL;
 
@@ -3676,114 +3617,50 @@ static	unsigned 	level = 0;
 		upper(cline);
 
 		if (cmdchar_used < 2)
-			alias = get_cmd_alias(cline, &alias_cnt, 
-						&alias_name, &arglist);
+		    alias = get_cmd_alias(cline, &arglist);
 
-		if (alias && alias_cnt < 0)
-		{
-			if (hist_flag && add_to_hist)
-				add_to_history(this_cmd);
-			call_user_alias(alias_name, alias, rest, arglist);
-			new_free(&alias_name);
-		}
-		else
-		{
-			/* History */
-			if (*cline == '!')
-			{
-				if ((cline = do_history(cline + 1, rest)) != NULL)
-				{
-					if (level == 1)
-						set_input(cline);
-					else
-						parse_command(cline, 0, sub_args);
-
-					new_free(&cline);
-				}
-				else
-					set_input(empty_string);
-			}
+		if (alias != NULL) {
+		    call_user_alias(cline, alias, rest, arglist);
+		} else if (*cline == '!') {
+		    /* History */
+		    if ((cline = do_history(cline + 1, rest)) != NULL) {
+			if (level == 1)
+			    set_input(cline);
 			else
-			{
-				if (hist_flag && add_to_hist)
-					add_to_history(this_cmd);
-				command = find_command(cline, &cmd_cnt);
+			    parse_command(cline, sub_args);
+			new_free(&cline);
+		    } else
+			set_input(empty_string);
+		} else if ((command = find_command(cline, &cmd_cnt)) != NULL &&
+			cmd_cnt == -1) {
+		    /* A non-ambiguous command. */
 
-				/*
-				 * At this point we know that there are
-				 * no exact matches for the alias.
-				 * What we do have to do is check to see
-				 * if there is a completed match for any
-				 * aliases (alias_cnt == 1), or completed
-				 * match for any commands (cmd_cnt == 1)
-				 * or any exact matches for commands
-				 * (cmd_cnt == -1)
-				 */
-
-				/*
-				 * First we see if there is an exact match
-				 * for commands, or if there was a completion
-				 * with no alias completions:
-				 */
-				if (cmd_cnt < 0 ||
-				   (alias_cnt == 0 && cmd_cnt == 1))
-				{
-				    /* I should make a function to do this */
-					if (!strcmp(command->name, "EXEC") && get_int_var(SECURITY_VAR) & SECURITY_NO_NONINTERACTIVE_EXEC)
-						yell("Warning: the command '%s %s' was not executed due to a security violation", command->name, rest);
-					else if (!strcmp(command->name, "SET") && get_int_var(SECURITY_VAR) & SECURITY_NO_NONINTERACTIVE_SET)
-						yell("Warning: the command '%s %s' was not executed due to a security violation", command->name, rest);
-					else if (command->func)
-						command->func(command->server_func, rest, sub_args);
-					else
-						say("%s: command disabled", command->name);
-				}
-
-				/*
-				 * If there is no built in command, or the
-				 * built in command is overriden by the alias,
-				 * then run the alias.
-				 */
-				else if ((alias_cnt == 1 && 
-					  cmd_cnt == 1 && 
-					  !strcmp(alias_name, command->name)) 
-				      || (alias_cnt == 1 && 
-					  cmd_cnt == 0))
-				{
-					call_user_alias(alias_name, alias,
-							rest, arglist);
-				}
-
-				/*
-				 * Otherwise, if the command is your nickname
-				 * fake a /me command.
-				 */
-				else if (is_me(from_server, cline))
-					mecmd(NULL, rest, empty_string);
-
-				/*
-				 * Kasi has asked me at least 6 times for this.
-				 * If i just go ahead and add it, he will
-				 * stop asking me.... :P
-				 */
-				else if (get_int_var(DISPATCH_UNKNOWN_COMMANDS_VAR))
-					send_to_server("%s %s", cline, rest);
-
-				/*
-				 * If its not ambiguous,
-				 */
-				else if (alias_cnt + cmd_cnt > 1)
-					say("Ambiguous command: %s", cline);
-
-				/*
-				 * Nothing to do but whine at the user.
-				 */
-				else
-					say("Unknown command: %s", cline);
-			}
-			if (alias)
-				new_free(&alias_name);
-		}
+		    /* I should make a function to do this */
+		    /* XXX: These are broken per the current 'set security'
+		     * documentation. */
+		    if (!strcmp(command->name, "EXEC") &&
+			    get_int_var(SECURITY_VAR) &
+			    SECURITY_NO_NONINTERACTIVE_EXEC)
+			yell("Warning: the command '%s %s' was not executed "
+				"due to a security violation", command->name,
+				rest);
+		    else if (!strcmp(command->name, "SET") &&
+			    get_int_var(SECURITY_VAR) &
+			    SECURITY_NO_NONINTERACTIVE_SET)
+			yell("Warning: the command '%s %s' was not executed "
+				"due to a security violation", command->name,
+				rest);
+		    else if (command->func != NULL)
+			command->func(command->server_func, rest, sub_args);
+		    else
+			say("%s: command disabled", command->name);
+		} else if (get_int_var(DISPATCH_UNKNOWN_COMMANDS_VAR))
+		    /* Kasi has asked me at least 6 times for this.  If I
+		     * just go ahead and add it, he will stop asking me....
+		     * :P */
+		    send_to_server("%s %s", cline, rest);
+		else
+		    say("Unknown command: %s", cline);
 	}
 	if (old_display_var != get_int_var(DISPLAY_VAR))
 		window_display = get_int_var(DISPLAY_VAR);
@@ -3795,6 +3672,100 @@ static	unsigned 	level = 0;
         return 0;
 }
 
+/*
+ * parse_input:
+ * This is a special function which handles only direct user input.  This
+ * helps in disentangling th\ngs like command completion and makes the above
+ * parsing routines much more efficient.  The only argument is the input
+ * from the user.
+ */
+void parse_input(const char *input) {
+    const char *line;
+    int cmd, noisy;
+    char *args = (get_int_var(INPUT_ALIASES_VAR) ? empty_string : NULL);
+    const char *rest;
+    char *alias = NULL;
+    char *comm;
+    int acnt, ccnt;
+    IrcCommand *icp = NULL;
+    char *buf;
+
+
+    /* Blank lines.  Very handy for pasting information, but not for much of
+     * anything else */
+    if (*input == '\0') {
+	send_text(get_target_by_refnum(0), empty_string, NULL, 1);
+	return;
+    }
+
+    /* see if it is a command or if it is text to be sent off */
+    line = input;
+    cmd = eat_cmd_chars(&line, &noisy);
+
+    if (cmd && *line == '!') {
+	parse_command(input, args); /* history stuff */
+	return; /* this is the only time we don't add to history.. */
+    }
+
+    add_to_history(input);
+    if (!cmd && !get_int_var(COMMAND_MODE_VAR)) {
+	send_text(get_target_by_refnum(0), line, NULL, 1);
+	return;
+    } else if (*line == '\'' && get_int_var(COMMAND_MODE_VAR)) {
+	send_text(get_target_by_refnum(0), line + 1, NULL, 1);
+	return;
+    }
+
+    /* Okay, otherwise we've got some kind of command input.. let's look
+     * at what we've got.  First, we need to yank the command name off
+     * from the rest of the input.  Then we try and find the command.
+     * Finally, we reconstruct the command line with the completed name
+     * and send the work along to parse_command! */
+    rest = line;
+    acnt = ccnt = 0;
+
+    /* Now get the command name and copy it into 'comm' */
+    while (!isspace(*rest) && *rest != '\0')
+	rest++;
+    comm = alloca((rest - line) + 1);
+    strncpy(comm, line, rest - line);
+    comm[rest - line] = '\0';
+    upper(comm);
+
+    /* Try and find the command.  We look first for an alias, then if we
+     * don't find an exact alias match, for a command.  After that is
+     * all done, we sort out the mess and re-create our input line with
+     * the correct values in place. */
+    if (cmd < 2)
+	alias = complete_cmd_alias(comm, &acnt);
+    if (acnt != -1)
+	/* If the alias does not exist, look for the command */
+	icp = find_command(comm, &ccnt);
+
+    /* Now allocate a buffer to store the resulting string in.. */
+    buf = alloca(strlen(comm) + strlen(rest) + 8);
+    /* An alias */
+    if (acnt == -1)
+	sprintf(buf, "%s%s", alias, rest);
+    /* A matched command, or a non-ambiguous command without an alias */
+    else if (ccnt < 0 || (acnt == 0 && ccnt == 1))
+	sprintf(buf, "//%s%s", icp->name, rest);
+    /* No builtin, or a builtin overriden by an alias.. */
+    else if ((acnt == 1 && ccnt == 0) ||
+	    (acnt == 1 && ccnt == 1 && !strcmp(alias, icp->name)))
+	sprintf(buf, "%s%s", alias, rest);
+    else if (is_me(from_server, comm))
+	sprintf(buf, "//ME%s", rest);
+    else {
+	if (acnt + ccnt > 1)
+	    say("Ambiguous command: %s", comm);
+	else
+	    say("Unknown command: %s", comm);
+	return;
+    }
+
+    parse_command(buf, args);
+}
 
 BUILT_IN_COMMAND(breakcmd)
 {

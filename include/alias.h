@@ -47,14 +47,11 @@ LIST_HEAD(alias_list, AliasItemStru);
 	void 	add_variable      	(char *name, char *stuff, int noisy,
 					 int stub);
 	void 	add_local_var    	(char *name, char *stuff, int noisy);
-#if 0	/* Internal now */
-	void 	add_cmd_alias 	   	(void);
-#endif
 
 	char *	get_variable		(char *name);
 	char **	glob_cmd_alias		(char *name, int *howmany);
-	char *	get_cmd_alias   	(char *name, int *howmany, 
-					 char **complete_name, void **args);
+	char *	get_cmd_alias		(char *name, void **args);
+	char *	complete_cmd_alias	(const char *name, int *howmany);
 	char **	get_subarray_elements 	(char *root, int *howmany, int type);
 
 
@@ -148,7 +145,7 @@ LIST_HEAD(alias_list, AliasItemStru);
 /*
  * Truly bogus. =)
  */
-	char	*parse_line_with_return (char *, char *, char *, int, int);
+	char	*parse_line_with_return (char *, char *, char *, int);
 	char 	*canon_number (char *input);
 
 #endif /* _ALIAS_H_ */
