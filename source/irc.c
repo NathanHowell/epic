@@ -1,4 +1,4 @@
-/* $EPIC: irc.c,v 1.390 2002/11/20 03:54:08 wd Exp $ */
+/* $EPIC: irc.c,v 1.390.2.1 2002/11/20 17:49:21 wd Exp $ */
 /*
  * ircII: a new irc client.  I like it.  I hope you will too!
  *
@@ -40,7 +40,7 @@
 /*
  * irc_version is what $J returns, its the common-name for the version.
  */
-const char irc_version[] = "EPIC4-1.1.7";
+const char irc_version[] = "EPIC4-1.1.x-wd";
 const char useful_info[] = "epic4 1 1 7";
 
 /*
