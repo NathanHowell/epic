@@ -52,7 +52,7 @@ void destroy_hash_table(hashtable_t *table) {
 	while (!SLIST_EMPTY(&table->table[i])) {
 	    hep = SLIST_FIRST(&table->table[i]);
 	    SLIST_REMOVE_HEAD(&table->table[i], lp);
-	    free(&hep);
+	    free(hep);
 	}
     }
     free(table->table);
