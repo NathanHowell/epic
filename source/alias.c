@@ -1,4 +1,4 @@
-/* $EPIC: alias.c,v 1.11.2.7 2003/03/24 17:53:00 wd Exp $ */
+/* $EPIC: alias.c,v 1.11.2.8 2003/03/25 09:20:33 wd Exp $ */
 /*
  * alias.c -- Handles the whole kit and caboodle for aliases.
  *
@@ -244,7 +244,7 @@ typedef struct RuntimeStackStru
 	const char *name;	/* Name of the stack */
 	char 	*current;	/* Current cmd being executed */
 	hashtable_t *vtable;	/* variable table */
-	struct alias_list vlist;/* and list */
+	struct alias_list *vlist;/* and list */
 	int	locked;		/* Are we locked in a wait? */
 	int	parent;		/* Our parent stack frame */
 }	RuntimeStack;
@@ -567,7 +567,7 @@ BUILT_IN_COMMAND(localcmd)
 	if (!my_strnicmp(name, "-dump", 2))	/* Illegal name anyways */
 	{
 		destroy_aliases(call_stack[wind_index].vtable,
-			&call_stack[wind_index].vlist);
+			call_stack[wind_index].vlist);
 		return;
 	}
 
@@ -952,7 +952,7 @@ void	add_variable	(char *name, char *stuff, int noisy, int stub)
 	 * name (which means there was no explicit namespace specified) and
 	 * the variable exists locally */
 	else if (nsp == LOCAL_NAMESPACE || (save == name &&
-		    find_local_var(name, NULL)))
+		    find_local_var(name, NULL) != NULL))
 		add_local_var(name, stuff, noisy);
 
 	else if (stuff && *stuff) {
@@ -1023,14 +1023,14 @@ void	add_local_var	(char *name, char *stuff, int noisy)
 	 * where it will be reaped later.
 	 */
 	if ((tmp = find_local_var(name, &rtsp)) == NULL) {
-		tmp = LIST_FIRST(&rtsp->vlist);
-		if (tmp != NULL && tmp->lp.le_prev != &rtsp->vlist) {
+		tmp = LIST_FIRST(rtsp->vlist);
+		if (tmp != NULL && tmp->lp.le_prev != rtsp->vlist) {
 		    int c;
 		    yell("List breakage before adding..");
 		    for (c = wind_index;c >= 0;c--) {
 			if (&call_stack[c] == rtsp)
 			    continue;
-			if (tmp->lp.le_prev == &call_stack[c].vlist) {
+			if (tmp->lp.le_prev == call_stack[c].vlist) {
 			    yell("call_stack[%d] has the list.");
 			    break;
 			}
@@ -1041,7 +1041,7 @@ void	add_local_var	(char *name, char *stuff, int noisy)
 
 		tmp = make_new_Alias(name);
 		hash_insert(rtsp->vtable, tmp);
-		LIST_INSERT_HEAD(&rtsp->vlist, tmp, lp);
+		LIST_INSERT_HEAD(rtsp->vlist, tmp, lp);
 	}
 
 	/* Fill in the interesting stuff */
@@ -1253,7 +1253,7 @@ static Alias *	find_local_var (char *name, RuntimeStack **frame)
 		if (x_debug & DEBUG_LOCAL_VARS)
 			yell("Looking for [%s] in level [%d]", name, c);
 
-		if (!LIST_EMPTY(&call_stack[c].vlist)) {
+		if (!LIST_EMPTY(call_stack[c].vlist)) {
 			char *s, save;
 
 			/* We can always hope that the variable exists */
@@ -1279,7 +1279,7 @@ static Alias *	find_local_var (char *name, RuntimeStack **frame)
 				*s = save;
 				alias = make_new_Alias(name);
 				hash_insert(call_stack[c].vtable, alias);
-				LIST_INSERT_HEAD(&call_stack[c].vlist,
+				LIST_INSERT_HEAD(call_stack[c].vlist,
 					alias, lp);
 			    }
 			    *s = save;
@@ -1390,9 +1390,9 @@ static void	list_local_var (char *name) {
 
 	for (cnt = wind_index; cnt >= 0; cnt = call_stack[cnt].parent)
 	{
-		if (LIST_EMPTY(&call_stack[cnt].vlist))
+		if (LIST_EMPTY(call_stack[cnt].vlist))
 		    continue;
-		LIST_FOREACH(ap, &call_stack[cnt].vlist, lp) {
+		LIST_FOREACH(ap, call_stack[cnt].vlist, lp) {
 		    if (!name || !strncmp(ap->name, name, len))
 			put_it("\t%s\t%s", ap->name, ap->stuff);
 		}
@@ -1906,6 +1906,7 @@ void 	make_local_stack 	(const char *name)
 		RESIZE(call_stack, RuntimeStack, max_wind);
 		for (i = wind_index;i < max_wind;i++) {
 		    memset(&call_stack[i], 0, sizeof(RuntimeStack));
+		    LIST_ALLOC(call_stack[i].vlist);
 		    call_stack[i].parent = -1;
 		}
 	}
@@ -1926,9 +1927,9 @@ void 	make_local_stack 	(const char *name)
 		    sizeof(Alias), NAMESPACE_HASH_SANITYLEN,
 		    HASH_FL_NOCASE | HASH_FL_STRING, strcasecmp);
 	else
-	    if (!LIST_EMPTY(&call_stack[wind_index].vlist))
+	    if (!LIST_EMPTY(call_stack[wind_index].vlist))
 		yell("make_local_stack(): stack frame list is non-empty!");
-	LIST_INIT(&call_stack[wind_index].vlist);
+	LIST_INIT(call_stack[wind_index].vlist);
 	call_stack[wind_index].locked = 0;
 }
 
@@ -1953,9 +1954,9 @@ void 	destroy_local_stack 	(void)
 	/*
 	 * We clean up as best we can here...
 	 */
-	if (!LIST_EMPTY(&call_stack[wind_index].vlist))
+	if (!LIST_EMPTY(call_stack[wind_index].vlist))
 	    destroy_aliases(call_stack[wind_index].vtable,
-		    &call_stack[wind_index].vlist);
+		    call_stack[wind_index].vlist);
 	if (call_stack[wind_index].current)
 		call_stack[wind_index].current = 0;
 	if (call_stack[wind_index].name)
