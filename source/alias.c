@@ -1,4 +1,4 @@
-/* $EPIC: alias.c,v 1.11.2.2 2003/02/27 12:42:48 wd Exp $ */
+/* $EPIC: alias.c,v 1.11.2.3 2003/02/27 14:31:08 wd Exp $ */
 /*
  * alias.c -- Handles the whole kit and caboodle for aliases.
  *
@@ -1457,7 +1457,7 @@ char	*get_variable_with_args (const char *str, const char *args, int *args_flag)
 	char	*ret = NULL;
 	char	*name = NULL;
 	char	*freep = NULL;
-	int	copy = 0;
+	int	copy = 1;
 	int	local = 0;
 
 	freep = name = remove_brackets(str, args, args_flag);
@@ -1468,15 +1468,14 @@ char	*get_variable_with_args (const char *str, const char *args, int *args_flag)
 	if (name[0] == ':' && name[1] == '\0') {
 	    copy = 0;
 	    ret = built_in_alias(*name, NULL);
-	} else if ((var = find_variable(name, 1)) != NULL) {
-	    copy = 1;
+	} else if ((var = find_variable(name, 1)) != NULL)
 	    ret = var->stuff;
-	} else if (str[1] == '\0' && (ret = built_in_alias(*str, NULL)))
+	else if (str[1] == '\0' && (ret = built_in_alias(*str, NULL)))
 	    copy = 0;
 	else if ((ret = make_string_var(str)))
 		copy = 0;
 	else if ((ret = getenv(str)))
-	    copy = 1;
+	    ;
 	else if (x_debug & DEBUG_UNKNOWN && ret == NULL)
 	    yell("Variable lookup to non-existant assign [%s]", name);
 

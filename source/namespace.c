@@ -1,4 +1,4 @@
-/* $EPIC: namespace.c,v 1.1.2.1 2003/02/27 12:17:24 wd Exp $ */
+/* $EPIC: namespace.c,v 1.1.2.2 2003/02/27 14:31:08 wd Exp $ */
 /*
  * namespace.c: Namespace tracking system.
  *
@@ -79,7 +79,7 @@ namespace_t *namespace_find(char *name) {
     namespace_t *nsp = namespaces.current;
     char *s;
 
-    if (strncmp(name, "::", 2)) {
+    if (!strncmp(name, "::", 2)) {
 	nsp = namespaces.root;
 	name += 2;
     }
