@@ -1,4 +1,4 @@
-/* $EPIC: output.c,v 1.6.2.1 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: output.c,v 1.6.2.2 2003/03/24 17:53:01 wd Exp $ */
 /*
  * output.c: handles a variety of tasks dealing with the output from the irc
  * program 

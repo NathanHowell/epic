@@ -1,4 +1,4 @@
-/* $EPIC: alias.c,v 1.11.2.6 2003/02/27 18:15:57 wd Exp $ */
+/* $EPIC: alias.c,v 1.11.2.7 2003/03/24 17:53:00 wd Exp $ */
 /*
  * alias.c -- Handles the whole kit and caboodle for aliases.
  *
@@ -936,7 +936,8 @@ void	add_variable	(char *name, char *stuff, int noisy, int stub)
 	/* Weed out invalid variable names */
 	ptr = after_expando(name, 1, NULL);
 	if (*ptr)
-		error("ASSIGN names may not contain '%c' (You asked for [%s])", *ptr, name);
+		error("ASSIGN names may not contain '%c' (You asked for [%s])",
+			*ptr, name);
 
 	/* Weed out FUNCTION_RETURN (die die die) */
 	else if (!strcmp(name, "FUNCTION_RETURN")) {
@@ -1022,6 +1023,22 @@ void	add_local_var	(char *name, char *stuff, int noisy)
 	 * where it will be reaped later.
 	 */
 	if ((tmp = find_local_var(name, &rtsp)) == NULL) {
+		tmp = LIST_FIRST(&rtsp->vlist);
+		if (tmp != NULL && tmp->lp.le_prev != &rtsp->vlist) {
+		    int c;
+		    yell("List breakage before adding..");
+		    for (c = wind_index;c >= 0;c--) {
+			if (&call_stack[c] == rtsp)
+			    continue;
+			if (tmp->lp.le_prev == &call_stack[c].vlist) {
+			    yell("call_stack[%d] has the list.");
+			    break;
+			}
+		    }
+		    if (c < 0)
+			yell("can't find the list.. hrm.");
+		}
+
 		tmp = make_new_Alias(name);
 		hash_insert(rtsp->vtable, tmp);
 		LIST_INSERT_HEAD(&rtsp->vlist, tmp, lp);
@@ -1180,7 +1197,7 @@ static Alias *	find_cmd_alias (char *name)
 		}
 
 		/* At this point, we have to see if 'item' was
-		 * redefined by the /load.  We call find_variable 
+		 * redefined by the /load.  We call find_cmd_alias 
 		 * recursively to pick up the new value */
 		return find_cmd_alias(save);
 	}
@@ -1201,10 +1218,10 @@ static Alias *	find_cmd_alias (char *name)
  */
 static Alias *	find_local_var (char *name, RuntimeStack **frame)
 {
-	Alias 	*alias = NULL;
-	int 	c = wind_index;
-	char 	*ptr;
-	int	function_return = 0;
+	Alias *alias = NULL;
+	int c = wind_index;
+	char *ptr;
+	int function_return = 0;
 
 	/* No name is an error */
 	if (!name)
@@ -1284,13 +1301,11 @@ static Alias *	find_local_var (char *name, RuntimeStack **frame)
 		}
 	}
 
-	if (alias)
-	{
+	if (alias) {
 		if (frame != NULL)
 			*frame = &call_stack[c];
 		return alias;
-	}
-	else if (frame)
+	} else if (frame != NULL)
 		*frame = &call_stack[wind_index];
 
 	return NULL;
@@ -1705,7 +1720,7 @@ char **	pmatch_assign_alias (char *name, int *howmany)
  */
 char **	get_subarray_elements (char *root, int *howmany, int type)
 {
-	LIST_HEAD(, AliasItemStru) *list;
+	struct alias_list *list;
 	Alias *ap;
 	int pos, cnt, max;
 	int cmp = 0;
@@ -1860,20 +1875,12 @@ void 	save_aliases (FILE *fp, int do_all)
 
 static
 void 	destroy_aliases (hashtable_t *table, struct alias_list *list) {
-	Alias *ap, *last = NULL;
+	Alias *ap;
 
-	LIST_FOREACH(ap, list, lp) {
-	    if (ap == last)
-		error("Ugh! ap == last (%s)", ap->name);
-	    else if (hash_find(table, ap->name) != ap)
-		error("Ugh! finding %s didn't return ap!");
-	    last = ap;
-	}
-	last = NULL;
-	while ((ap = LIST_FIRST(list)) != NULL) {
-	    last = ap;
-	    hash_delete(table, ap);
+	while (!LIST_EMPTY(list)) {
+	    ap =  LIST_FIRST(list);
 	    LIST_REMOVE(ap, lp);
+	    hash_delete(table, ap);
 	    new_free(&ap->stuff);
 	    new_free(&ap->stub);
 	    new_free(&ap->filename);
@@ -1889,7 +1896,7 @@ void 	make_local_stack 	(const char *name)
 
 	if (wind_index >= max_wind)
 	{
-		int tmp_wind = wind_index;
+		int i;
 
 		if (max_wind == -1)
 			max_wind = 8;
@@ -1897,14 +1904,10 @@ void 	make_local_stack 	(const char *name)
 			max_wind <<= 1;
 
 		RESIZE(call_stack, RuntimeStack, max_wind);
-		for (; wind_index < max_wind; wind_index++) {
-			call_stack[wind_index].vtable = NULL;
-			LIST_INIT(&call_stack[wind_index].vlist);
-			call_stack[wind_index].current = NULL;
-			call_stack[wind_index].name = NULL;
-			call_stack[wind_index].parent = -1;
+		for (i = wind_index;i < max_wind;i++) {
+		    memset(&call_stack[i], 0, sizeof(RuntimeStack));
+		    call_stack[i].parent = -1;
 		}
-		wind_index = tmp_wind;
 	}
 
 	/* Just in case... */
@@ -1922,6 +1925,10 @@ void 	make_local_stack 	(const char *name)
 	    call_stack[wind_index].vtable = create_hash_table(4,
 		    sizeof(Alias), NAMESPACE_HASH_SANITYLEN,
 		    HASH_FL_NOCASE | HASH_FL_STRING, strcasecmp);
+	else
+	    if (!LIST_EMPTY(&call_stack[wind_index].vlist))
+		yell("make_local_stack(): stack frame list is non-empty!");
+	LIST_INIT(&call_stack[wind_index].vlist);
 	call_stack[wind_index].locked = 0;
 }
 
@@ -2188,6 +2195,7 @@ typedef	struct	aliasstacklist
 {
 	int	which;
 	char	*name;
+	char	*nspace;
 	Alias	*list;
 	struct aliasstacklist *next;
 }	AliasStack;
@@ -2195,117 +2203,112 @@ typedef	struct	aliasstacklist
 static  AliasStack *	alias_stack = NULL;
 static	AliasStack *	assign_stack = NULL;
 
-void	do_stack_alias (int type, char *args, int which)
-{
-#if 0
+void	do_stack_alias (int type, char *args, int which) {
 	char		*name;
 	AliasStack	*aptr, **aptrptr;
 	Alias		*alptr;
 	int		cnt;
 	
 	if (args)
-		upper(args);
+	    upper(args);
 
-	if (which == STACK_DO_ALIAS)
-	{
-		name = "ALIAS";
-		aptrptr = &alias_stack;
-	}
-	else
-	{
-		name = "ASSIGN";
-		aptrptr = &assign_stack;
+	if (which == STACK_DO_ALIAS) {
+	    name = "ALIAS";
+	    aptrptr = &alias_stack;
+	} else {
+	    name = "ASSIGN";
+	    aptrptr = &assign_stack;
 	}
 
-	if (!*aptrptr && (type == STACK_POP || type == STACK_LIST))
-	{
-		say("%s stack is empty!", name);
-		return;
+	if (!*aptrptr && (type == STACK_POP || type == STACK_LIST)) {
+	    say("%s stack is empty!", name);
+	    return;
 	}
 
-	if (type == STACK_PUSH)
-	{
-		if (which == STACK_DO_ALIAS)
-		{
-			int	i;
-
-			/* Um. Can't delete what we want to keep! :P */
-			if ((alptr = find_cmd_alias(args, &cnt)))
-				remove_from_array((array *)&cmd_alias, 
-					alptr->name);
+	if (type == STACK_PUSH) {
+	    if (which == STACK_DO_ALIAS) {
+		if ((alptr = find_cmd_alias(args)) != NULL) {
+		    hash_delete(alptr->nspace->ftable, alptr);
+		    LIST_REMOVE(alptr, lp);
 		}
-		else
-		{
-			int	i;
-
-			if ((alptr = find_variable(args, 0)))
-				remove_from_array((array *)&variable, 
-					alptr->name);
+	    } else {
+		if ((alptr = find_variable(args, 0)) != NULL) {
+		    hash_delete(alptr->nspace->vtable, alptr);
+		    LIST_REMOVE(alptr, lp);
 		}
+	    }
 
-		aptr = (AliasStack *)new_malloc(sizeof(AliasStack));
-		aptr->list = alptr;
-		aptr->name = m_strdup(args);
-		aptr->next = aptrptr ? *aptrptr : NULL;
-		*aptrptr = aptr;
-		return;
+	    if (alptr == NULL)
+		return; /* there's no reason to stack dead entries.. */
+
+	    aptr = (AliasStack *)new_malloc(sizeof(AliasStack));
+	    aptr->list = alptr;
+	    aptr->name = m_strdup(args);
+	    aptr->nspace = namespace_get_full_name(alptr->nspace, 1);
+	    aptr->next = aptrptr ? *aptrptr : NULL;
+	    *aptrptr = aptr;
+	    return;
 	}
 
-	if (type == STACK_POP)
-	{
-		AliasStack *prev = NULL;
+	if (type == STACK_POP) {
+	    AliasStack *prev = NULL;
 
-		for (aptr = *aptrptr; aptr; prev = aptr, aptr = aptr->next)
-		{
-			/* have we found it on the stack? */
-			if (!my_stricmp(args, aptr->name))
-			{
-				/* remove it from the list */
-				if (prev == NULL)
-					*aptrptr = aptr->next;
-				else
-					prev->next = aptr->next;
+	    for (aptr = *aptrptr; aptr; prev = aptr, aptr = aptr->next) {
+		/* have we found it on the stack? */
+		if (!my_stricmp(args, aptr->name)) {
+		    /* remove it from the list */
+		    if (prev == NULL)
+			*aptrptr = aptr->next;
+		    else
+			prev->next = aptr->next;
 
-				/* throw away anything we already have */
-				delete_cmd_alias(args, 0);
+		    /* throw away anything we already have */
+		    if (which == STACK_DO_ALIAS)
+			delete_cmd_alias(args, 0);
 
-				/* put the new one in. */
-				if (aptr->list)
-				{
-					if (which == STACK_DO_ALIAS)
-						add_to_array((array *)&cmd_alias, (array_item *)(aptr->list));
-					else
-						add_to_array((array *)&variable, (array_item *)(aptr->list));
-				}
-
-				/* free it */
-				new_free((char **)&aptr->name);
-				new_free((char **)&aptr);
-				return;
+		    /* See if the namespace for 'aptr' is still valid.  if
+		     * it isn't, don't do anything else.. */
+		    if ((aptr->list->nspace = namespace_find(aptr->nspace)) !=
+			    NULL) {
+			/* put the new one in. */
+			if (which == STACK_DO_ALIAS) {
+			    hash_insert(aptr->list->nspace->ftable,
+				    aptr->list);
+			    LIST_INSERT_HEAD(&aptr->list->nspace->flist,
+				    aptr->list, lp);
+			} else {
+			    hash_insert(aptr->list->nspace->vtable,
+				    aptr->list);
+			    LIST_INSERT_HEAD(&aptr->list->nspace->vlist,
+				    aptr->list, lp);
 			}
+		    }
+
+		    /* free it */
+		    new_free((char **)&aptr->name);
+		    new_free((char **)&aptr->nspace);
+		    new_free((char **)&aptr);
+		    return;
 		}
-		say("%s is not on the %s stack!", args, name);
-		return;
+	    }
+	    say("%s is not on the %s stack!", args, name);
+	    return;
 	}
-	if (type == STACK_LIST)
-	{
-		AliasStack	*tmp;
 
-		say("%s STACK LIST", name);
-		for (tmp = *aptrptr; tmp; tmp = tmp->next)
-		{
-			if (!tmp->list)
-				say("\t%s\t<Placeholder>", tmp->name);
+	if (type == STACK_LIST) {
+	    AliasStack	*tmp;
 
-			else if (tmp->list->stub)
-				say("\t%s STUBBED TO %s", tmp->name, tmp->list->stub);
-
-			else
-				say("\t%s\t%s", tmp->name, tmp->list->stuff);
-		}
-		return;
+	    say("%s STACK LIST", name);
+	    for (tmp = *aptrptr; tmp; tmp = tmp->next) {
+		if (tmp->list->stub)
+		    say("%s\t%s STUBBED TO %s", tmp->nspace, tmp->name,
+			    tmp->list->stub);
+		else
+		    say("%s\t%s\t%s", tmp->nspace, tmp->name,
+			    tmp->list->stuff);
+	    }
+	    return;
 	}
 	say("Unknown STACK type ??");
-#endif
 }
 

@@ -1,4 +1,4 @@
-/* $EPIC: vars.c,v 1.19.2.1 2003/02/27 15:29:57 wd Exp $ */
+/* $EPIC: vars.c,v 1.19.2.2 2003/03/24 17:53:02 wd Exp $ */
 /*
  * vars.c: All the dealing of the irc variables are handled here. 
  *

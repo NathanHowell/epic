@@ -4,9 +4,9 @@ dnl except those bits attributed otherwise.
 dnl thanks to the screen 3.3 configure.in for giving me examples to
 dnl work from and steal ;)
 dnl
-dnl @(#)$Id: configure.in,v 1.22.2.1 2003/02/27 15:29:55 wd Exp $
+dnl @(#)$Id: configure.in,v 1.22.2.2 2003/03/24 17:53:00 wd Exp $
 
-AC_REVISION($Revision: 1.22.2.1 $)dnl
+AC_REVISION($Revision: 1.22.2.2 $)dnl
 AC_INIT(source/irc.c)
 AC_CONFIG_HEADER(include/defs.h)
 
@@ -413,18 +413,6 @@ else
 		AC_DEFINE(UNKNOWN_32INT)
 	fi
 fi
-
-dnl ----------------------------------------------------------
-dnl
-dnl sun_len in <sys/un.h>?
-dnl
-
-AC_MSG_CHECKING(for sun_len in <sys/un.h>)
-AC_EGREP_CPP([sun_len], 
-[
-#include <sys/un.h>
-], AC_DEFINE(HAVE_SUN_LEN) AC_MSG_RESULT(yes), AC_MSG_RESULT(no))
-
 
 dnl ----------------------------------------------------------
 dnl

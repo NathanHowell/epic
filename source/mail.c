@@ -1,4 +1,4 @@
-/* $EPIC: mail.c,v 1.3.2.1 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: mail.c,v 1.3.2.2 2003/03/24 17:53:01 wd Exp $ */
 /*
  * mail.c -- a gross simplification of mail checking.
  * Only unix maildrops are supported.

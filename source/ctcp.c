@@ -1,4 +1,4 @@
-/* $EPIC: ctcp.c,v 1.16.2.1 2003/02/27 15:29:55 wd Exp $ */
+/* $EPIC: ctcp.c,v 1.16.2.2 2003/03/24 17:53:00 wd Exp $ */
 /*
  * ctcp.c:handles the client-to-client protocol(ctcp). 
  *

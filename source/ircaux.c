@@ -1,4 +1,4 @@
-/* $EPIC: ircaux.c,v 1.55.2.1 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: ircaux.c,v 1.55.2.2 2003/03/24 17:53:01 wd Exp $ */
 /*
  * ircaux.c: some extra routines... not specific to irc... that I needed 
  *
@@ -788,7 +788,9 @@ char *	new_next_arg (char *str, char **new_ptr)
 	}
 	else
 	{
+#if 0
 noquotedword:
+#endif
 		str = ptr;
 		while (*str && !risspace(*str))
 			str++;
@@ -1935,7 +1937,7 @@ static FILE *	open_compression (char *executable, char *filename)
  * WITH A NEW VALUE (ie, the variable will be changed) UPON RETURN.  You must
  * not save the original value of '*filename' and use it after calling uzfopen.
  */
-FILE *	uzfopen (char **filename, char *path, int do_error)
+FILE *	uzfopen (char **filename, const char *path, int do_error)
 {
 static int		setup				= 0;
 static 	Filename 	path_to_gunzip;
@@ -2341,7 +2343,7 @@ Timeval time_add (Timeval one, Timeval two)
 
 	td.tv_usec = one.tv_usec + two.tv_usec;
 	td.tv_sec = one.tv_sec + two.tv_sec;
-	if (td.tv_usec > 1000000)
+	if (td.tv_usec >= 1000000)
 	{
 		td.tv_usec -= 1000000;
 		td.tv_sec++;
@@ -4170,17 +4172,57 @@ const char *	find_backward_quote (const char *input, const char *start)
 	return input;		/* Wherever we are is fine. */
 }
 
-const char *	my_strerror (int number)
+const char *	my_strerror (int err1, int err2)
 {
-	if (number < 0)
+static	char	buffer[1024];
+
+	if (err1 == -1)
 	{
+	    if (err2 < 0)
+	    {
 #ifdef HAVE_HSTRERROR
 		return hstrerror(h_errno);
 #else
 		return "Hostname lookup failure";
 #endif
+	    }
+	    else
+		return strerror(errno);
 	}
-	return strerror(errno);
+	else if (err1 == -2)
+	    return "The operation is not supported for the protocol family";
+	else if (err1 == -3)
+	    return "The hostname has no address in the protocol family";
+	else if (err1 == -4)
+	    return "The presentation internet address was invalid";
+	else if (err1 == -5)
+	    return "The hostname does not resolve";
+	else if (err1 == -6)
+	    return "There is no virtual host for the protocol family";
+	else if (err1 == -7)
+	    return "The remote peer to connect to was not provided";
+	else if (err1 == -8)
+	    return "The local and remote address are in different protocol families.";
+	else if (err1 == -9)
+	    return "Connection was not successful (may have timed out)";
+	else if (err1 == -10)
+	    return "Requested local port is not available.";
+	else if (err1 == -11)
+	{
+	    snprintf(buffer, 1024, "Connect failed: %s", strerror(err2));
+	    return buffer;
+	}
+	else if (err1 == -12)
+	    return "Connection was not successful (may have been reset)";
+	else if (err1 == -13)
+	    return "The local address to bind to was not provided";
+	else if (err1 == -14)
+	    return "The protocol family does not make sense";
+	else
+	{
+	    snprintf(buffer, 1024, "EPIC Network Error %d", err1);
+	    return buffer;
+	}
 }
 
 /* 

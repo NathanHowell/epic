@@ -1,4 +1,4 @@
-/* $EPIC: exec.c,v 1.10.2.1 2003/02/27 15:29:55 wd Exp $ */
+/* $EPIC: exec.c,v 1.10.2.2 2003/03/24 17:53:00 wd Exp $ */
 /*
  * exec.c: handles exec'd process for IRCII 
  *
@@ -744,7 +744,7 @@ static void 	handle_filedesc (Process *proc, int *fd, int hook_nonl, int hook_nl
 	char 	exec_buffer[IO_BUFFER_SIZE + 1];
 	int	len;
 
-	switch ((len = dgets(exec_buffer, *fd, 0, NULL))) /* No buffering! */
+	switch ((len = dgets(*fd, exec_buffer, IO_BUFFER_SIZE, 0, NULL))) /* No buffering! */
 	{
 		case -1:	/* Something died */
 		{

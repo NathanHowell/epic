@@ -34,7 +34,7 @@ hashtable_t *create_hash_table(int elems, size_t offset, size_t len,
     if (cmpsym != NULL)
 	htp->cmpsym = cmpsym;
     else
-	htp->cmpsym = memcmp;
+	htp->cmpsym = (hash_cmpfunc)memcmp;
 
     htp->table = malloc(sizeof(struct hashbucket) * htp->size);
     memset(htp->table, 0, sizeof(struct hashbucket) * htp->size);

@@ -1,4 +1,4 @@
-/* $EPIC: expr.c,v 1.9.2.1 2003/02/27 12:17:24 wd Exp $ */
+/* $EPIC: expr.c,v 1.9.2.2 2003/03/24 17:53:00 wd Exp $ */
 /*
  * expr.c -- The expression mode parser and the textual mode parser
  * #included by alias.c -- DO NOT DELETE
@@ -71,9 +71,9 @@ char *canon_number (char *input)
 	}
 	else
 	{
-		char *dot = strchr(input, '.');
-		if (dot)
-			*dot = 0;
+		char *dotloc = strchr(input, '.');
+		if (dotloc)
+			*dotloc = 0;
 	}
 
 	return input;

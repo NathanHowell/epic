@@ -1,81 +1,11 @@
-/* include/defs.h.in.  Generated automatically from configure.in by autoheader.  */
-
-/* Define if on AIX 3.
-   System headers sometimes define this.
-   We just want to avoid a redefinition error message.  */
-#ifndef _ALL_SOURCE
-#undef _ALL_SOURCE
-#endif
-
-/* Define if using alloca.c.  */
-#undef C_ALLOCA
-
-/* Define to one of _getb67, GETB67, getb67 for Cray-2 and Cray-YMP systems.
-   This function is required for alloca.c support on those systems.  */
-#undef CRAY_STACKSEG_END
-
-/* Define if the `getpgrp' function takes no argument.  */
-#undef GETPGRP_VOID
-
-/* Define to `int' if <sys/types.h> doesn't define.  */
-#undef gid_t
-
-/* Define if you have alloca, as a function or macro.  */
-#undef HAVE_ALLOCA
-
-/* Define if you have <alloca.h> and it should be used (not on Ultrix).  */
-#undef HAVE_ALLOCA_H
-
-/* Define to `int' if <sys/types.h> doesn't define.  */
-#undef mode_t
-
-/* Define if your C compiler doesn't accept -c and -o together.  */
-#undef NO_MINUS_C_MINUS_O
-
-/* Define if your Fortran 77 compiler doesn't accept -c and -o together. */
-#undef F77_NO_MINUS_C_MINUS_O
-
-/* Define to `int' if <sys/types.h> doesn't define.  */
-#undef pid_t
-
-/* Define if you need to in order for stat and other things to work.  */
-#undef _POSIX_SOURCE
-
-/* Define as the return type of signal handlers (int or void).  */
-#undef RETSIGTYPE
-
-/* Define to the type of arg1 for select(). */
-#undef SELECT_TYPE_ARG1
-
-/* Define to the type of args 2, 3 and 4 for select(). */
-#undef SELECT_TYPE_ARG234
-
-/* Define to the type of arg5 for select(). */
-#undef SELECT_TYPE_ARG5
-
-/* Define to `unsigned' if <sys/types.h> doesn't define.  */
-#undef size_t
-
-/* If using the C implementation of alloca, define if you know the
-   direction of stack growth for your system; otherwise it will be
-   automatically deduced at run-time.
- STACK_DIRECTION > 0 => grows toward higher addresses
- STACK_DIRECTION < 0 => grows toward lower addresses
- STACK_DIRECTION = 0 => direction of growth unknown
+/* include/defs.h.in.  Generated from configure.in by autoheader.  */
+/*
+ * @(#)$Id: defs.h.in,v 1.19.2.2 2003/03/24 17:53:00 wd Exp $
  */
-#undef STACK_DIRECTION
 
-/* Define if you have the ANSI C header files.  */
-#undef STDC_HEADERS
-
-/* Define if `sys_siglist' is declared by <signal.h>.  */
-#undef SYS_SIGLIST_DECLARED
-
-/* Define if you can safely include both <sys/time.h> and <time.h>.  */
-#undef TIME_WITH_SYS_TIME
-
-/* Define to `int' if <sys/types.h> doesn't define.  */
-#undef uid_t
+/*
+ * Functions
+ */
 
 /* Define this if you have fpathconf(2) */
 #undef HAVE_FPATHCONF
@@ -89,11 +19,17 @@
 /* define this if you have gettimeofday(2) */
 #undef HAVE_GETTIMEOFDAY
 
+/* define this if you have glob(3) */
+#undef HAVE_GLOB
+
 /* Define this if you have killpg(2) */
 #undef HAVE_KILLPG
 
 /* define this if you have memmove(3) */
 #undef HAVE_MEMMOVE
+
+/* define this if you have scandir(3) */
+#undef HAVE_SCANDIR
 
 /* define this if you have setenv(3) */
 #undef HAVE_SETENV
@@ -122,6 +58,76 @@
 /* define this if you have vsnprintf(3) */
 #undef HAVE_VSNPRINTF
 
+
+/*
+ * Implicit Global variables
+ */
+
+/* define if you have sys_siglist */
+#undef HAVE_SYS_SIGLIST
+
+
+/*
+ * Header files
+ */
+
+/* define this if you have fcntl.h */
+#undef HAVE_FCNTL_H
+
+/* define this if you have memory.h */
+#undef HAVE_MEMORY_H
+
+/* define this if you have netdb.h */
+#undef HAVE_NETDB_H
+
+/* define this if you have stdarg.h */
+#undef HAVE_STDARG_H
+
+/* define this if you have string.h */
+#undef HAVE_STRING_H
+
+/* define this if you have sys/fcntl.h */
+#undef HAVE_SYS_FCNTL_H
+
+/* define this if you have sys/file.h */
+#undef HAVE_SYS_FILE_H
+
+/* define this if you have sys/select.h */
+#undef HAVE_SYS_SELECT_H
+
+/* define this if you have sys/time.h */
+#undef HAVE_SYS_TIME_H
+
+/* define this if you have sys/wait.h */
+#undef HAVE_SYS_WAIT_H
+
+/*
+ * Libraries
+ */
+
+/* define this if -lnls exists */
+#undef HAVE_LIB_NLS
+
+/* define this if -lnsl exists */
+#undef HAVE_LIB_NSL
+
+/* define his if -lPW exists */
+#undef HAVE_LIB_PW
+
+/* define this if you are using -ltermcap */
+#undef USING_TERMCAP
+
+/* define this if you are using -lxtermcap */
+#undef USING_XTERMCAP
+
+/* define this if you are using -ltermlib */
+#undef USING_TERMLIB
+
+
+/*
+ * System, library, and header semantics
+ */
+
 /* Define this if you have SUN_LEN in <sys/un.h> */
 #undef HAVE_SUN_LEN
 
@@ -134,6 +140,9 @@
 /* Define this if your getpgrp is broken posix */
 #undef GETPGRP_VOID
 
+/* define this if signal's return void */
+#undef SIGVOID
+
 /* define this if an unsigned long is 32 bits */
 #undef UNSIGNED_LONG32
 
@@ -142,6 +151,15 @@
 
 /* define this if you are unsure what is is 32 bits */
 #undef UNKNOWN_32INT
+
+/* define this if you are on a svr4 derivative */
+#undef SVR4
+
+/* define this to the location of normal unix mail */
+#undef UNIX_MAIL
+
+/* Define this if you have inet_aton(). */
+#undef HAVE_INET_ATON
 
 /* Define this if you need to include sys/select.h */
 #undef NEED_SYS_SELECT_H
@@ -183,8 +201,14 @@
  */
 #undef PERL
 
+/* Define this is DIRSIZ takes no argument */
+#undef DIRSIZ_TAKES_NO_ARG
+
 /* Define this if you have setsid() */
 #undef HAVE_SETSID
+
+/* Define this if you have a useful FIONREAD */
+#undef HAVE_USEFUL_FIONREAD
 
 /* Define this if you have tparm(2) */
 #undef HAVE_TPARM
@@ -219,6 +243,9 @@
 /* Define this if you want OPENSSL support */
 #undef HAVE_SSL
 
+/* Define this if you want OPENSSL2 support */
+#undef WANT_SSL2
+
 /* Define this if you have sysctlbyname() */
 #undef HAVE_SYSCTLBYNAME
 
@@ -230,6 +257,15 @@
 
 /* Define this if your system has SA_LEN in its sockaddrs */
 #undef HAVE_SA_LEN
+
+/* Define this if you have inet_ntop() */
+#undef HAVE_INET_NTOP
+
+/* Define this if you have inet_pton() */
+#undef HAVE_INET_PTON
+
+/* Define this if you have gethostbyname2() */
+#undef HAVE_GETHOSTBYNAME2
 
 /* Define this if you don't have siglen_t */
 #undef HAVE_SOCKLEN_T
@@ -264,56 +300,159 @@
 /* Define this if you have TCL */
 #undef TCL
 
-/* The number of bytes in a unsigned int.  */
-#undef SIZEOF_UNSIGNED_INT
 
-/* The number of bytes in a unsigned long.  */
-#undef SIZEOF_UNSIGNED_LONG
+/* Define to one of `_getb67', `GETB67', `getb67' for Cray-2 and Cray-YMP
+   systems. This function is required for `alloca.c' support on those systems.
+   */
+#undef CRAY_STACKSEG_END
 
-/* Define if you have the <dirent.h> header file.  */
+/* Define to 1 if using `alloca.c'. */
+#undef C_ALLOCA
+
+/* Define to 1 if the `getpgrp' function requires zero arguments. */
+#undef GETPGRP_VOID
+
+/* Define to 1 if you have `alloca', as a function or macro. */
+#undef HAVE_ALLOCA
+
+/* Define to 1 if you have <alloca.h> and it should be used (not on Ultrix).
+   */
+#undef HAVE_ALLOCA_H
+
+/* Define to 1 if you have the <dirent.h> header file, and it defines `DIR'.
+   */
 #undef HAVE_DIRENT_H
 
-/* Define if you have the <fcntl.h> header file.  */
+/* Define to 1 if you have the <fcntl.h> header file. */
 #undef HAVE_FCNTL_H
 
-/* Define if you have the <ndir.h> header file.  */
+/* Define to 1 if you have the <inttypes.h> header file. */
+#undef HAVE_INTTYPES_H
+
+/* Define to 1 if you have the <memory.h> header file. */
+#undef HAVE_MEMORY_H
+
+/* Define to 1 if you have the <ndir.h> header file, and it defines `DIR'. */
 #undef HAVE_NDIR_H
 
-/* Define if you have the <netdb.h> header file.  */
+/* Define to 1 if you have the <netdb.h> header file. */
 #undef HAVE_NETDB_H
 
-/* Define if you have the <regex.h> header file.  */
+/* Define to 1 if you have the <regex.h> header file. */
 #undef HAVE_REGEX_H
 
-/* Define if you have the <sys/dir.h> header file.  */
+/* Define to 1 if you have the <stdint.h> header file. */
+#undef HAVE_STDINT_H
+
+/* Define to 1 if you have the <stdlib.h> header file. */
+#undef HAVE_STDLIB_H
+
+/* Define to 1 if you have the <strings.h> header file. */
+#undef HAVE_STRINGS_H
+
+/* Define to 1 if you have the <string.h> header file. */
+#undef HAVE_STRING_H
+
+/* Define to 1 if you have the <sys/dir.h> header file, and it defines `DIR'.
+   */
 #undef HAVE_SYS_DIR_H
 
-/* Define if you have the <sys/fcntl.h> header file.  */
+/* Define to 1 if you have the <sys/fcntl.h> header file. */
 #undef HAVE_SYS_FCNTL_H
 
-/* Define if you have the <sys/file.h> header file.  */
+/* Define to 1 if you have the <sys/file.h> header file. */
 #undef HAVE_SYS_FILE_H
 
-/* Define if you have the <sys/filio.h> header file.  */
+/* Define to 1 if you have the <sys/filio.h> header file. */
 #undef HAVE_SYS_FILIO_H
 
-/* Define if you have the <sys/ndir.h> header file.  */
+/* Define to 1 if you have the <sys/ndir.h> header file, and it defines `DIR'.
+   */
 #undef HAVE_SYS_NDIR_H
 
-/* Define if you have the <sys/select.h> header file.  */
+/* Define to 1 if you have the <sys/select.h> header file. */
 #undef HAVE_SYS_SELECT_H
 
-/* Define if you have the <sys/sysctl.h> header file.  */
+/* Define to 1 if you have the <sys/stat.h> header file. */
+#undef HAVE_SYS_STAT_H
+
+/* Define to 1 if you have the <sys/sysctl.h> header file. */
 #undef HAVE_SYS_SYSCTL_H
 
-/* Define if you have the <sys/syslimits.h> header file.  */
+/* Define to 1 if you have the <sys/syslimits.h> header file. */
 #undef HAVE_SYS_SYSLIMITS_H
 
-/* Define if you have the <sys/time.h> header file.  */
+/* Define to 1 if you have the <sys/time.h> header file. */
 #undef HAVE_SYS_TIME_H
 
-/* Define if you have the <sys/un.h> header file.  */
+/* Define to 1 if you have the <sys/types.h> header file. */
+#undef HAVE_SYS_TYPES_H
+
+/* Define to 1 if you have the <sys/un.h> header file. */
 #undef HAVE_SYS_UN_H
 
-/* Define if you have the <termcap.h> header file.  */
+/* Define to 1 if you have the <termcap.h> header file. */
 #undef HAVE_TERMCAP_H
+
+/* Define to 1 if you have the <unistd.h> header file. */
+#undef HAVE_UNISTD_H
+
+/* Define to the address where bug reports for this package should be sent. */
+#undef PACKAGE_BUGREPORT
+
+/* Define to the full name of this package. */
+#undef PACKAGE_NAME
+
+/* Define to the full name and version of this package. */
+#undef PACKAGE_STRING
+
+/* Define to the one symbol short name of this package. */
+#undef PACKAGE_TARNAME
+
+/* Define to the version of this package. */
+#undef PACKAGE_VERSION
+
+/* Define as the return type of signal handlers (`int' or `void'). */
+#undef RETSIGTYPE
+
+/* The size of a `unsigned int', as computed by sizeof. */
+#undef SIZEOF_UNSIGNED_INT
+
+/* The size of a `unsigned long', as computed by sizeof. */
+#undef SIZEOF_UNSIGNED_LONG
+
+/* If using the C implementation of alloca, define if you know the
+   direction of stack growth for your system; otherwise it will be
+   automatically deduced at run-time.
+        STACK_DIRECTION > 0 => grows toward higher addresses
+        STACK_DIRECTION < 0 => grows toward lower addresses
+        STACK_DIRECTION = 0 => direction of growth unknown */
+#undef STACK_DIRECTION
+
+/* Define to 1 if you have the ANSI C header files. */
+#undef STDC_HEADERS
+
+/* Define to 1 if you can safely include both <sys/time.h> and <time.h>. */
+#undef TIME_WITH_SYS_TIME
+
+/* Define to 1 if on AIX 3.
+   System headers sometimes define this.
+   We just want to avoid a redefinition error message.  */
+#ifndef _ALL_SOURCE
+# undef _ALL_SOURCE
+#endif
+
+/* Define to `int' if <sys/types.h> doesn't define. */
+#undef gid_t
+
+/* Define to `int' if <sys/types.h> does not define. */
+#undef mode_t
+
+/* Define to `int' if <sys/types.h> does not define. */
+#undef pid_t
+
+/* Define to `unsigned' if <sys/types.h> does not define. */
+#undef size_t
+
+/* Define to `int' if <sys/types.h> doesn't define. */
+#undef uid_t

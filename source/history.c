@@ -1,4 +1,4 @@
-/* $EPIC: history.c,v 1.6.2.1 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: history.c,v 1.6.2.2 2003/03/24 17:53:01 wd Exp $ */
 /*
  * history.c: stuff to handle command line history 
  *

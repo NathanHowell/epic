@@ -1,4 +1,4 @@
-/* $EPIC: newio.c,v 1.6.2.1 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: newio.c,v 1.6.2.2 2003/03/24 17:53:01 wd Exp $ */
 /*
  * newio.c: This is some handy stuff to deal with file descriptors in a way
  * much like stdio's FILE pointers 
@@ -155,7 +155,7 @@ static	void	init_io (void)
  *	>0 -- If a full, newline terminated line was available, the length
  *	      of the line is returned.
  */
-int	dgets (char *str, int des, int buffer, void *ssl_aux)
+int	dgets (int des, char *buf, size_t buflen, int buffer, void *ssl_aux)
 {
 	int	cnt = 0, 
 		c = 0;		/* gcc can die. */
@@ -225,7 +225,7 @@ int	dgets (char *str, int des, int buffer, void *ssl_aux)
 
 	    if (c <= 0)
 	    {
-		*str = 0;
+		*buf = 0;
 		dgets_errno = (c == 0) ? -1 : errno;
 		return -1;
 	    }
@@ -245,7 +245,7 @@ int	dgets (char *str, int des, int buffer, void *ssl_aux)
 	    if (ioe->segments > MAX_SEGMENTS)
 	    {
 		yell("***XXX*** Too many read()s on des [%d] without a newline! ***XXX***", des);
-		*str = 0;
+		*buf = 0;
 		dgets_errno = ECONNABORTED;
 		return -1;
 	    }
@@ -253,19 +253,38 @@ int	dgets (char *str, int des, int buffer, void *ssl_aux)
 	}
 
 	/*
-	 * Slurp up the data that is available into 'str'. 
+	 * Slurp up the data that is available into 'buf'. 
 	 */
 	while (ioe->read_pos < ioe->write_pos)
 	{
-	    if (((str[cnt] = ioe->buffer[ioe->read_pos++])) == '\n')
+	    if (((buf[cnt] = ioe->buffer[ioe->read_pos++])) == '\n')
 		break;
 	    cnt++;
+	}
+
+	/* If the line is too long, truncate it. */
+	/* 
+	 * Before anyone whines about this, a lot of code in epic 
+	 * silently assumes that incoming lines from the server don't
+	 * exceed 510 bytes.  Until we "fix" all of those cases, it is
+	 * better to truncate excessively long lines than to let them
+	 * overflow buffers!
+	 */
+	if (cnt > buflen - 1)
+	{
+		if (x_debug & DEBUG_INBOUND) 
+			yell("FD [%d], Too long (did [%d], max [%d])", des, cnt, buflen);
+
+		/* Remember that 'buf' must be 'buflen + 1' bytes big! */
+		if (buf[cnt] == '\n')
+			buf[buflen - 1] = '\n';
+		cnt = buflen - 1;
 	}
 
 	/*
 	 * Terminate it
 	 */
-	str[cnt + 1] = 0;
+	buf[cnt + 1] = 0;
 
 	/*
 	 * If we end in a newline, then all is well.
@@ -273,7 +292,7 @@ int	dgets (char *str, int des, int buffer, void *ssl_aux)
 	 * The caller then would need to do a strlen() to get
  	 * the amount of data.
 	 */
-	if (str[cnt] == '\n')
+	if (buf[cnt] == '\n')
 	    return cnt;
 	else
 	    return 0;
@@ -365,6 +384,10 @@ int 	new_open (int des)
 		FD_SET(des, &readables);
 	if (FD_ISSET(des, &writables))
 		FD_CLR(des, &writables);
+	if (FD_ISSET(des, &held_readables))
+		FD_CLR(des, &held_readables);
+	if (FD_ISSET(des, &held_writables))
+		FD_CLR(des, &held_writables);
 
 	/*
 	 * Keep track of the highest fd in use.
@@ -389,6 +412,8 @@ int 	new_open_for_writing (int des)
 
 	if (!FD_ISSET(des, &writables))
 		FD_SET(des, &writables);
+	if (!FD_ISSET(des, &held_writables))
+		FD_SET(des, &held_writables);
 
 	/*
 	 * Keep track of the highest fd in use.
@@ -404,16 +429,19 @@ int 	new_open_for_writing (int des)
  *
  * Remove the fd from the select fd sets so
  * that it won't bother us until we unhold it.
+ *
+ * Note that this is meant to be a read/write
+ * hold and that this only operates on read
+ * sets because that's all the client uses.
  */
 int	new_hold_fd (int des)
 {
-	if (des < 0)
-		return des;		/* Invalid */
-	if (des > global_max_fd)
-		return des;		/* Invalid */
-
-	if (FD_ISSET(des, &readables))
+	if (0 <= des && des <= global_max_fd
+		&& FD_ISSET(des, &readables))
+	{
+		FD_SET(des, &held_readables);
 		FD_CLR(des, &readables);
+	}
 
 	return des;
 }
@@ -423,13 +451,12 @@ int	new_hold_fd (int des)
  */
 int	new_unhold_fd (int des)
 {
-	if (des < 0)
-		return des;		/* Invalid */
-	if (des > global_max_fd)
-		return des;		/* Invalid */
-
-	if (!FD_ISSET(des, &readables))
+	if (0 <= des && des <= global_max_fd
+		&& FD_ISSET(des, &held_readables))
+	{
 		FD_SET(des, &readables);
+		FD_CLR(des, &held_readables);
+	}
 
 	return des;
 }
@@ -447,6 +474,10 @@ int	new_close (int des)
 		FD_CLR(des, &readables);
 	if (FD_ISSET(des, &writables))
 		FD_CLR(des, &writables);
+	if (FD_ISSET(des, &held_readables))
+		FD_CLR(des, &held_readables);
+	if (FD_ISSET(des, &held_writables))
+		FD_CLR(des, &held_writables);
 
 	if (io_rec)
 	{
@@ -460,14 +491,9 @@ int	new_close (int des)
 	 * If we're closing the highest fd in use, then we
 	 * want to adjust global_max_fd downward to the next highest fd.
 	 */
-	if (des == global_max_fd)
-	{
-		do
-			des--;
-		while (!FD_ISSET(des, &readables));
-
-		global_max_fd = des;
-	}
+	while ( !FD_ISSET(global_max_fd, &readables) &&
+		!FD_ISSET(global_max_fd, &held_readables))
+			global_max_fd--;
 	return -1;
 }
 

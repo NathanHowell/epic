@@ -1,4 +1,4 @@
-/* $EPIC: network.c,v 1.41.2.1 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: network.c,v 1.41.2.2 2003/03/24 17:53:01 wd Exp $ */
 /*
  * network.c -- handles stuff dealing with connecting and name resolving
  *
@@ -496,7 +496,7 @@ int	inet_ntostr (SA *name, char *host, int hsize, char *port, int psize, int fla
 
 	len = socklen(name);
 	if ((retval = Getnameinfo(name, len, host, hsize, port, psize, flags | NI_NUMERICSERV))) {
-		yell("Getnameinfo(%s): %s", host, gai_strerror(retval));
+		yell("Getnameinfo (sockaddr->p_addr): %s", gai_strerror(retval));
 		return retval;
 	}
 
@@ -655,6 +655,10 @@ static int Connect (int fd, SA *addr)
 	return connect(fd, addr, socklen(addr));
 }
 
+/*
+ * XXX - Ugh!  Some getaddrinfo()s take AF_UNIX paths as the 'servname'
+ * instead of as the 'nodename'.  How heinous!
+ */
 static int	Getaddrinfo (const char *nodename, const char *servname, const AI *hints, AI **res)
 {
 #ifdef GETADDRINFO_DOES_NOT_DO_AF_UNIX
@@ -673,7 +677,7 @@ static int	Getaddrinfo (const char *nodename, const char *servname, const AI *hi
                 memset(&storage, 0, sizeof(storage));
                 storage.sun_family = AF_UNIX;
                 strlcpy(storage.sun_path, nodename, sizeof(storage.sun_path));
-#ifdef HAVE_SUN_LEN
+#ifdef HAVE_SA_LEN
 # ifdef SUN_LEN
                 storage.sun_len = SUN_LEN(&storage);
 # else
@@ -697,7 +701,15 @@ static int	Getaddrinfo (const char *nodename, const char *servname, const AI *hi
 	}
 #endif
 
-	return getaddrinfo(nodename, servname, hints, res);
+	/*
+	 * XXX -- Support getaddrinfo()s that want an AF_UNIX path to
+	 * be the second argument and not the first one.  Bleh.
+	 */
+	if ((nodename && strchr(nodename, '/')) || 
+	    (hints && hints->ai_family == AF_UNIX))
+		return getaddrinfo(NULL, nodename, hints, res);
+	else
+		return getaddrinfo(nodename, servname, hints, res);
 }
 
 static void	Freeaddrinfo (AI *ai)

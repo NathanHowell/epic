@@ -1,4 +1,4 @@
-/* $EPIC: ssl.c,v 1.5.2.1 2003/02/27 15:29:57 wd Exp $ */
+/* $EPIC: ssl.c,v 1.5.2.2 2003/03/24 17:53:02 wd Exp $ */
 /*
  * ssl.c: SSL connection functions
  *

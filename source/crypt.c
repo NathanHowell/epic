@@ -1,4 +1,4 @@
-/* $EPIC: crypt.c,v 1.8.2.1 2003/02/27 15:29:55 wd Exp $ */
+/* $EPIC: crypt.c,v 1.8.2.2 2003/03/24 17:53:00 wd Exp $ */
 /*
  * crypt.c: handles some encryption of messages stuff. 
  *

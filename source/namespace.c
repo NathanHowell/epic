@@ -1,4 +1,4 @@
-/* $EPIC: namespace.c,v 1.1.2.3 2003/02/27 15:14:18 wd Exp $ */
+/* $EPIC: namespace.c,v 1.1.2.4 2003/03/24 17:53:01 wd Exp $ */
 /*
  * namespace.c: Namespace tracking system.
  *
@@ -136,5 +136,28 @@ void namespace_destroy(namespace_t *space) {
     destroy_hash_table(nsp->vtable);
 
     new_free(&nsp);
+}
+
+/* This gets the full name of the namespace.  If explicit is non-zero, the
+ * '::' is added at the root.  The memory returned must be freed by the
+ * caller! */
+char *namespace_get_full_name(namespace_t *space, int explicit) {
+    namespace_t *nsp = space;
+    char *buf = m_strdup(space->name);
+    char *tmp;
+
+    while ((nsp = nsp->parent) != NULL) {
+	/* now *prepend* this one's name onto the current space.. */
+	tmp = buf;
+	buf = m_3dup(nsp->name, "::", tmp);
+	new_free(&tmp);
+    }
+    if (explicit) {
+	tmp = buf;
+	buf = m_2dup("::", tmp);
+	new_free(&tmp);
+    }
+
+    return buf;
 }
 

@@ -6,14 +6,6 @@ KNOWN ERRATA (eg, bugs, or unresolved requests):
   prefered over X windows.  Should this be fixed, or at least made an option?
   Maybe try X, fall back to gnu screen on failure?
 * Should /set beep off suppress stripping of beeps?
-* Allegedly 464 numeric shouldn't force a reconnect if we're registered.
-* The mangler might expand things more than 3 times -- possible
-  interference from the attribute parser?  caused by many ^v's.
-* Add /timer -delete_for_window or something to avoid window switch warnings?
-* After calling connectory(), try to output meaningful error messages, not 
-  just blindly calling my_strerror(errno).
-* scrollback/scrollforward/scrollend should be controlled by /window verbs
-  and not solely by keybindings.
 * /TYPE honors keybindings, and calls edit_char(), but /XTYPE -L does not 
   honor key bindings because it calls input_add_character().
 * /DEFER needs to be server-specific.
@@ -42,6 +34,13 @@ KNOWN ERRATA (eg, bugs, or unresolved requests):
   wierd masks.
 * $isnumber() will cause internal damage to the client when fed numbers that
   are too large for some unknown reason.
+* Join #foo, then join #foobar, doesn't WHO for #foobar (maxxx)
+* Study update_input() and update_all_windows() and determine if used properly
+* DCC send yourself a file and then DCC get it leads to wackiness
+* New function, you give it a window level, it gives you the window refnum
+* IPV6-over-dcc, i promised morty i would.
+* Shall remove_trailing_spaces honor a \ before a space trailing?
+* New built in function to get who_from and who_level
 
 [See http://www.epicsol.org/PROJECTS for things to come in the future]
 [See http://www.epicsol.org/CHANGELOG for things that changed in the past]
@@ -173,10 +172,8 @@ THE CHANGELOG SINCE THE LAST RELEASE:
   seperated by spaces, and the final quote must be present.  Stuff started
   breaking when I added the second one, so I #if'd it out.
 * Fixed a leak with "/alias (args) {}".
-* Flood checking seems to have failed somehow in the last few weeks.  Tracked
-  it down to an inverted FLOOD hook and the fact that a matching flood now
-  causes the message to be ignored, which never used to happen.  Fixed the
-  last one by adding /set FLOOD_IGNORE on/off.
+* Fix bogus inverted flood check which broke flood checking.
+* Add /set flood_ignore (on|off) 
 * Found a good answer to $glob*()..  Giving them a null argument will now
   cause them to read the rest of the arg list as a single argument.
   eg, $glob(""  my "lovely" filename with spaces and quotes.jpg )
@@ -190,16 +187,74 @@ THE CHANGELOG SINCE THE LAST RELEASE:
 * Tuned the autoget script to deal with url quoted dcc requests gracefully.
 * Got rid of the reference to word_count() in /fe and /fec.
 * Diked safe_new_next_arg() out and made it use new_next_arg() instead.
-* Fixed a problem that broke ctcp-over-dcc, reported by NSX.
-* Fixed a problem that broke unix socket detection, reported by Q_ (unconfirmed).
+* Fixed problem that broke ctcp-over-dcc, reported by NSX.
+* Fixed problem that broke unix socket detection, reported by Q_ (unconfirmed).
 * Changed the default FLOOD_IGNORE setting to off.
 * Fixed a bug in the commandqueues script.
 * Altered 324 processing so that the hook is called when joining a channel.
 * tabkey.ce alteratered to make input line modification smoother.
-
-* Fix for a serious problem in the language parser that causes script logic
-  to fail, perhaps requiring a restart.  This is *REMOTELY TRIGGERABLE*.
-  This bug appeared in the 1.1.* tree and isn't present in 1.0.1 which is the
-  latest release.  If you are running 1.1.* (commit id 470 or below), people
-  may be able to knock you off the irc server with specially crafted
-  messages.  I might release the details later to give people time to upgrade.
+* Make sure to reset errno before calling strtod() in check_val().
+  -- This bug, present from epic4-1.1.1 to commit 470, causes epic to 
+     malfunction for a time and can be induced by a remote user.  Be careful.
+* Ran "Valgrind" over epic which turned up a handful of potential bugs.
+* Keep two sets of "interesting" fd's, a physical set and a logical set.
+* This helps us keep track of ``held'' fd's more reasonably.
+* More minor $dccctl() cleanups.
+* Changed the log level for when a flood is triggered to CRAP.
+* Fix $fsize(),$fexists() (for now) to take arg list as filename
+* In future, will probably use $glob()s null arg trick for $fsize/fexists().
+* Fix for an arbitrary select() loop yell from hop and nsx.
+* Fix for a window bug from hop.
+* More larnifications from rogue servers, reported by cras.
+* Add extra slop for logically attributed denormalized display strings
+* Const-ify a few Timevals, just for good measure.
+* Don't hardcode use of AF_INET in dcc.c, rather use a global variable for it.
+* Use "global_family" var to pass hint what socket fam to use.  AF_INET for now.
+* Add extra sanity check just in case window->screen goes NULL in status redraw
+* Fix several benign compile-time issues.
+* Reorganize param list to dgets() to include a length argument
+* Add (set|get)_server_line_length(), the maximum size of an irc protocol line.
+* Convert dgets() callers to the new calling style.
+* Explicitly set "mask" to 0 in cs_alist_hash(), so it is initialized
+* Change type() to typecmd() to avoid name conflicts.
+* Change 'dot' to 'dotlocl' to avoid name conflicts.
+* Change 'op' to 'reduce' to avoid name conflicts.
+* Fix a typo in the error message from /window kill.
+* Add a panic to detect larne's recent bug that I fixed, just in case.
+* Constify the "path" argument to uzfopen().
+* Make sure return value of strlen() is assigned to a 'size_t' not an 'int'.
+* Split load() into load() and load1(), load1() reads a file opened by load().
+* Now load() is "interpretation-free", and load1() can be replaced.
+* Fix various minor compile-time issues.
+* Change %P status line expando to give more useful information.
+* Make /LOAD locate and open file arguments; and a generic handler
+* Create loader_which() which a /LOAD handler for /WHICH command
+* The standard loader is now called "loader_std"
+* Add an empty next-generation loader called "loader_pf"
+* Add "loader" info to "load_level" data; It's $2 in $loadinfo().
+* /LOAD now takes -std and -pf arguments to specify which loader you want.
+* Implement the "PF" (preformatted) loader.  /LOAD -PF <filename>
+* Set the "loader type" within each /LOADer
+* Add proof-of-concept code for /DCC CHAT nick -6 to do ipv6 dcc chat's.
+* Move add_user_who, add_user_end from parse.c to numbers.c
+* Add (set|get)_server_max_cached_chan_size(), max chan size for u@h caching.
+* Add $serverctl(SET|GET <refnum> MAXCACHESIZE), largest channel we do WHO for.
+* Move 'whobase' call from /on join to /on 324.
+* Don't call 'whobase' (userhost caching) if too many users on channel.
+* Fix who replies to use "who target" as target for output.
+* This makes /ON WHO hook in the correct window.
+* Add window_scroll_(backward|forward|backwards_lines|forwards_line)
+* Add /WINDOW SCROLL_BACKWARD, /WINDOW SCROLL_FORWARD
+* Add /WINDOW SCROLL_START, /WINDOW SCROLL_END
+* Fix bug that caused cursor to go wacky on screen < 32 columns.
+* Fix 464 handler to only prompt for password if we're not registered yet.
+* Fix bug that made ^C,,, slurp up all ,'s after it.
+* Add /timer -delete_for_window <winref> to delete window's timer.
+* Enhance my_strerror() to take an EPIC Network Error and an errno.
+* Enhance Getaddrinfo() to use AF_UNIX path as 'path' not 'host'.
+* Confirmed that $match("\\[s s1 "s *"\\]" "s s") works like it should now.
+* Store a "current window priority" number in each window.
+* Add get_winref_by_servref() returns highest "priority" window for a server
+* Have /defer track server, use server's "current window" (per above)
+* I'd like to have other things use this, like maybe /xeval -s.
+* Fix a bug with /dcc chat nick -6

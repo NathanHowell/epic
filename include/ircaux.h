@@ -7,7 +7,7 @@
  *
  * See the COPYRIGHT file, or do a HELP IRCII COPYRIGHT 
  *
- * @(#)$Id: ircaux.h,v 1.35.2.1 2003/02/27 15:29:55 wd Exp $
+ * @(#)$Id: ircaux.h,v 1.35.2.2 2003/03/24 17:53:00 wd Exp $
  */
 
 #ifndef _IRCAUX_H_
@@ -94,7 +94,7 @@ char *	strmopencat		(char *, int, ...);
 char *	stristr 		(const char *, const char *);
 char *	rstristr 		(const char *, const char *);
 char *	findchar		(char *, int);
-FILE *	uzfopen 		(char **, char *, int);
+FILE *	uzfopen 		(char **, const char *, int);
 int	end_strcmp 		(const char *, const char *, int);
 char*   exec_pipe		(char *, char *, size_t *, char**);
 FILE **	open_exec		(char *executable, char **args);
@@ -176,7 +176,7 @@ char *	enquote_it		(char *str, size_t len);
 char *	dequote_it		(char *str, size_t *len);
 const char *	find_forward_quote	(const char *, const char *);
 const char *	find_backward_quote	(const char *, const char *);
-const char *	my_strerror		(int);
+const char *	my_strerror		(int, int);
 
 /* From words.c */
 #define SOS 		-32767

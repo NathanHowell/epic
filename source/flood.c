@@ -1,4 +1,4 @@
-/* $EPIC: flood.c,v 1.4.2.1 2003/02/27 15:29:55 wd Exp $ */
+/* $EPIC: flood.c,v 1.4.2.2 2003/03/24 17:53:00 wd Exp $ */
 /*
  * flood.c: handle channel flooding.
  *
@@ -48,6 +48,8 @@
 #include "server.h"
 #include "vars.h"
 #include "functions.h"
+#include "lastlog.h"
+#include "window.h"
 
 static	char	*ignore_types[NUMBER_OF_FLOODS] =
 {
@@ -268,9 +270,11 @@ static	int	 pos = 0;
 				chan ? chan : "*", line)))
 		{
 			tmp->floods++;
+			message_from(chan, LOG_CRAP);
 			if (get_int_var(FLOOD_WARNING_VAR))
 				say("FLOOD: %ld %s detected from %s in %f seconds",
 					tmp->cnt+1, ignore_types[type], nick, diff);
+			message_from(NULL, LOG_CURRENT);
 		}
 		else
 		{

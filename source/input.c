@@ -1,4 +1,4 @@
-/* $EPIC: input.c,v 1.7.2.1 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: input.c,v 1.7.2.2 2003/03/24 17:53:01 wd Exp $ */
 /*
  * input.c: does the actual input line stuff... keeps the appropriate stuff
  * on the input line, handles insert/delete of characters/words... the whole
@@ -324,7 +324,6 @@ void	update_input (int update)
 		ZONE = last_input_screen->co - (WIDTH * 2);
 		if (ZONE < 10)
 			ZONE = 10;		/* Take that! */
-
 		START_ZONE = WIDTH;
 		END_ZONE = last_input_screen->co - WIDTH;
 
@@ -375,9 +374,11 @@ void	update_input (int update)
 	 * left of the zone, after adjusting for the length of the prompt.
 	 */
 	if (START_ZONE == WIDTH)
+	    INPUT_ONSCREEN = 0;
+	else {
+	    if ((INPUT_ONSCREEN = START_ZONE - WIDTH - INPUT_PROMPT_LEN) < 0)
 		INPUT_ONSCREEN = 0;
-	else
-		INPUT_ONSCREEN = START_ZONE - WIDTH - INPUT_PROMPT_LEN;
+	}
 
 	/*
 	 * And the cursor is simply how many characters away THIS_POS is
@@ -1336,7 +1337,7 @@ void	edit_char (u_char key)
  * This was moved from keys.c, because it certainly does not belong there,
  * and this seemed a reasonable place for it to go for now.
  */
-BUILT_IN_COMMAND(type)
+BUILT_IN_COMMAND(typecmd)
 {
 	int	c;
 	char	key;

@@ -1,4 +1,4 @@
-/* $EPIC: screen.c,v 1.34.2.1 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: screen.c,v 1.34.2.2 2003/03/24 17:53:01 wd Exp $ */
 /*
  * screen.c
  *
@@ -610,7 +610,7 @@ const u_char *read_color_seq (const u_char *start, void *d, int blinkbold)
 			}
 		}
 
-		if (*ptr == ',')
+		if (fg && *ptr == ',')
 			continue;
 		break;
 	}
@@ -802,15 +802,15 @@ u_char *	normalize_string (const u_char *str, int logical)
 	 * in case you need to tack something else onto it.
 	 */
 	maxpos = strlen(str);
-	output = (u_char *)new_malloc(maxpos + 64);
+	output = (u_char *)new_malloc(maxpos + 192);
 	pos = 0;
 
 	while ((chr = next_char()))
 	{
 	    if (pos > maxpos)
 	    {
-		maxpos += 64; /* Extend 64 chars at a time */
-		RESIZE(output, unsigned char, maxpos + 64);
+		maxpos += 192; /* Extend 192 chars at a time */
+		RESIZE(output, unsigned char, maxpos + 192);
 	    }
 
 	    switch (ansi_state[chr])
@@ -1131,7 +1131,7 @@ u_char *	normalize_string (const u_char *str, int logical)
 			if (pos + args[0] > maxpos)
 			{
 				maxpos += args[0]; 
-				RESIZE(output, u_char, maxpos + 64);
+				RESIZE(output, u_char, maxpos + 192);
 			}
 			while (args[0]-- > 0)
 			{
@@ -1495,15 +1495,15 @@ u_char *	denormalize_string (const u_char *str)
 	 * in case you need to tack something else onto it.
 	 */
 	maxpos = strlen(str);
-	output = (u_char *)new_malloc(maxpos + 64);
+	output = (u_char *)new_malloc(maxpos + 192);
 	pos = 0;
 
 	while (*str)
 	{
 		if (pos > maxpos)
 		{
-			maxpos += 64; /* Extend 64 chars at a time */
-			RESIZE(output, unsigned char, maxpos + 64);
+			maxpos += 192; /* Extend 192 chars at a time */
+			RESIZE(output, unsigned char, maxpos + 192);
 		}
 		switch (*str)
 		{
@@ -1873,7 +1873,7 @@ const 	u_char	*ptr;
 			 * and if they overflow the line we let them bleed
 			 * to the next line.
 			 */
-			while (buffer[word_break] == ' ' && word_break < pos)
+			while (word_break < pos && buffer[word_break] == ' ')
 				word_break++;
 
 			/*
@@ -2437,6 +2437,10 @@ static void 	scroll_window (Window *window)
 	if (dumb_mode)
 		return;
 
+	if (window->cursor > window->display_size)
+		panic("Window [%d]'s cursor [%d] is off the display [%d]",
+			window->refnum, window->cursor, window->display_size);
+
 	/*
 	 * If the cursor is beyond the window then we should probably
 	 * look into scrolling.
@@ -2753,7 +2757,7 @@ Window	*create_additional_screen (void)
 	if ((new_cmd = client_bind((SA *)&local_sockaddr, sizeof(local_sockaddr))) < 0)
 	{
 		yell("Couldnt establish server side -- error [%d] [%s]", 
-				new_cmd, my_strerror(errno));
+				new_cmd, my_strerror(new_cmd, errno));
 		return NULL;
 	}
 	port = ntohs(local_sockaddr.sin_port);
@@ -3005,7 +3009,7 @@ void 	do_screens (fd_set *rd, fd_set *wd)
 		{
 			FD_CLR(screen->control, rd);
 
-			if (dgets(buffer, screen->control, 1, NULL) < 0)
+			if (dgets(screen->control, buffer, IO_BUFFER_SIZE, 1, NULL) < 0)
 			{
 				kill_screen(screen);
 				yell("Error from remote screen [%d].", dgets_errno);
@@ -3071,7 +3075,7 @@ void 	do_screens (fd_set *rd, fd_set *wd)
 
 			if (dumb_mode)
 			{
-				if (dgets(buffer, screen->fdin, 1, NULL) < 0)
+				if (dgets(screen->fdin, buffer, IO_BUFFER_SIZE, 1, NULL) < 0)
 				{
 					say("IRCII exiting on EOF from stdin");
 					irc_exit(1, "EPIC - EOF from stdin");

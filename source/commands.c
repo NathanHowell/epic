@@ -1,4 +1,4 @@
-/* $EPIC: commands.c,v 1.44.2.2 2003/02/27 15:29:55 wd Exp $ */
+/* $EPIC: commands.c,v 1.44.2.3 2003/03/24 17:53:00 wd Exp $ */
 /*
  * commands.c -- Stuff needed to execute commands in ircII.
  *		 Includes the bulk of the built in commands for ircII.
@@ -332,7 +332,7 @@ static	IrcCommand irc_command[] =
 	{ "TIMER",	"TIMER",	timercmd,		0 },
 	{ "TOPIC",	"TOPIC",	e_topic,		0 },
 	{ "TRACE",	"TRACE",	send_comm,		0 },
-	{ "TYPE",	NULL,		type,			0 }, /* keys.c */
+	{ "TYPE",	NULL,		typecmd,		0 }, /* keys.c */
 	{ "UNCLEAR",	"UNCLEAR",	e_clear,		0 },
 	{ "UNLESS",	"UNLESS",	ifcmd,			0 }, /* if.c */
 	{ "UNLOAD",	NULL,		unloadcmd,		0 }, /* alias.c */
@@ -550,8 +550,14 @@ BUILT_IN_COMMAND(dcc)
 		dcc_list((char *) NULL);
 }
 
-static	char ** defer_list = NULL;
-static	char **	subarg_list = NULL;
+struct defer {
+	char *	cmds;
+	int	servref;
+	char *	subargs;
+};
+typedef struct defer Defer;
+
+static	Defer *	defer_list = NULL;
 static	int	defer_list_size = -1;
 	int	need_defered_commands = 0;
 
@@ -561,19 +567,28 @@ void	do_defered_commands (void)
 
 	if (defer_list)
 	{
-		for (i = 0; defer_list[i]; i++)
-		{
-			parse_line("deferred", defer_list[i], subarg_list[i], 0, 0);
-			new_free(&defer_list[i]);
-			new_free(&subarg_list[i]);
-		}
+	    int old_from_server = from_server;
+	    int old_winref = get_winref_by_servref(from_server);
+
+	    for (i = 0; defer_list[i].cmds; i++)
+	    {
+		from_server = defer_list[i].servref;
+		make_window_current_by_refnum(get_winref_by_servref(from_server));
+
+		parse_line("deferred", defer_list[i].cmds, 
+				       defer_list[i].subargs, 0, 0);
+		new_free(&defer_list[i].cmds);
+		new_free(&defer_list[i].subargs);
+	    }
+
+	    from_server = old_from_server;
+	    make_window_current_by_refnum(old_winref);
 	}
 
 	defer_list_size = 1;
-	RESIZE(defer_list, char *, defer_list_size);
-	RESIZE(subarg_list, char *, defer_list_size);
-	defer_list[0] = NULL;
-	subarg_list[0] = NULL;
+	RESIZE(defer_list, Defer, defer_list_size);
+	defer_list[0].cmds = NULL;
+	defer_list[0].subargs = NULL;
 	need_defered_commands = 0;
 }
 
@@ -583,19 +598,19 @@ BUILT_IN_COMMAND(defercmd)
 	if (defer_list_size <= 0)
 	{
 		defer_list_size = 1;
-		RESIZE(defer_list, char *, defer_list_size);
-		RESIZE(subarg_list, char *, defer_list_size);
-		defer_list[0] = NULL;
-		subarg_list[0] = NULL;
+		RESIZE(defer_list, Defer, defer_list_size);
+		defer_list[0].cmds = NULL;
+		defer_list[0].subargs = NULL;
 	}
 
 	defer_list_size++;
-	RESIZE(defer_list, char *, defer_list_size);
-	RESIZE(subarg_list, char *, defer_list_size);
-	defer_list[defer_list_size - 2] = m_strdup(args);
-	defer_list[defer_list_size - 1] = NULL;
-	subarg_list[defer_list_size - 2] = m_strdup(subargs);
-	subarg_list[defer_list_size - 1] = NULL;
+	RESIZE(defer_list, Defer, defer_list_size);
+	defer_list[defer_list_size - 2].cmds = m_strdup(args);
+	defer_list[defer_list_size - 2].subargs = m_strdup(subargs);
+	defer_list[defer_list_size - 2].servref = from_server;
+
+	defer_list[defer_list_size - 1].cmds = NULL;
+	defer_list[defer_list_size - 1].subargs = NULL;
 	need_defered_commands++;
 }
 
@@ -1443,6 +1458,7 @@ struct load_info
 {
 	char 	*filename;
 	char	*package;
+	char	*loader;
 	int	package_set_here;
 	int	line;
 	int	start_line;
@@ -1450,7 +1466,7 @@ struct load_info
 
 int 	load_depth = -1;
 
-void dump_load_stack (int onelevel)
+void	dump_load_stack (int onelevel)
 {
 	int i = load_depth;
 
@@ -1481,6 +1497,16 @@ const char *current_filename (void)
 		return empty_string;
 }
 
+const char *current_loader (void) 
+{ 
+	if (load_depth == -1)
+		return empty_string;
+	else if (load_level[load_depth].loader)
+		return load_level[load_depth].loader;
+	else
+		return empty_string;
+}
+
 int	current_line (void)
 { 
 	if (load_depth == -1)
@@ -1507,6 +1533,9 @@ BUILT_IN_COMMAND(packagecmd)
 		malloc_strcpy(&load_level[load_depth].package, args);
 }
 
+static void	loader_which (FILE *fp, const char *filename, char *args, struct load_info *);
+static void	loader_std (FILE *fp, const char *filename, char *args, struct load_info *);
+static void	loader_pf  (FILE *fp, const char *filename, char *args, struct load_info *);
 /*
  * load: the /LOAD command.  Reads the named file, parsing each line as
  * though it were typed in (passes each line to parse_line). 
@@ -1514,24 +1543,14 @@ BUILT_IN_COMMAND(packagecmd)
  */
 BUILT_IN_COMMAND(load)
 {
-	FILE	*fp;
-	char	*filename;
-	int	flag = 0;
-        int     paste_level = 0;
-	char	*start,
-		*current_row = NULL,
-#define MAX_LINE_SIZE BIG_BUFFER_SIZE * 5
-		buffer[MAX_LINE_SIZE * 2 + 1];
-	int	no_semicolon = 1;
-	char	*irc_path;
+	char *	filename;
+	char *	sargs;
+	char *	irc_path;
+	char *	expanded;
+	FILE *	fp;
 	int	display;
-	char	*expanded = NULL;
-
-	if (!(irc_path = get_string_var(LOAD_PATH_VAR)))
-	{
-		say("LOAD_PATH has not been set");
-		return;
-	}
+	int	do_one_more = 0;
+	void	(*loader) (FILE *, const char *, char *, struct load_info *);
 
 	if (++load_depth == MAX_LOAD_DEPTH)
 	{
@@ -1545,6 +1564,14 @@ BUILT_IN_COMMAND(load)
 	window_display = 0;
 	permit_status_update(0);	/* No updates to the status bar! */
 
+	/*
+	 * Defult loader: "std" for /load, "which" for /which
+	 */
+	if (command && *command == 'W')
+	    loader = loader_which;
+	else
+	    loader = loader_std;
+
 	/* 
 	 * We iterate over the whole list -- if we use the -args flag, the
 	 * we will make a note to exit the loop at the bottom after we've
@@ -1552,363 +1579,61 @@ BUILT_IN_COMMAND(load)
 	 */
 	while (args && *args && (filename = next_arg(args, &args)))
 	{
-		/* 
-		 * If we use the args flag, then we will get the next
-		 * filename (via continue) but at the bottom of the loop
-		 * we will exit the loop 
-		 */
-		if (my_strnicmp(filename, "-args", strlen(filename)) == 0)
-		{
-			flag = 1;
-			continue;
-		}
+	    if (do_one_more)
+	    {
+		sargs = args;
+		args = NULL;
+	    }
+	    else if (my_strnicmp(filename, "-pf", strlen(filename)) == 0)
+	    {
+		loader = loader_pf;
+		continue;
+	    }
+	    else if (my_strnicmp(filename, "-std", strlen(filename)) == 0)
+	    {
+		loader = loader_std;
+		continue;
+	    }
+	    /* 
+	     * If we use the args flag, then we will get the next
+	     * filename (via continue) but at the bottom of the loop
+	     * we will exit the loop 
+	     */
+	    else if (my_strnicmp(filename, "-args", strlen(filename)) == 0)
+	    {
+		do_one_more = 1;
+		continue;		/* Pick up the filename */
+	    }
+	    else
+		sargs = NULL;
 
-		/*
-		 * uzfopen emits an error if the file is not found, so we dont.
-		 * uzfopen() also frees 'expanded' for us on error.
-		 */
-		expanded = m_strdup(filename);
-		if (!(fp = uzfopen(&expanded, irc_path, 1)))
-			continue;
+	    /* Locate the file */
+	    if (!(irc_path = get_string_var(LOAD_PATH_VAR)))
+	    {
+		say("LOAD_PATH has not been set");
+		continue;
+	    }
 
-		/*
-		 * Is it the "WHICH" command?
-		 */
-		if (command && *command == 'W')
-		{
-			yell("%s", expanded);	/* window_display is 0 here. */
-			if (fp)
-				fclose (fp);
-			new_free(&expanded);
-			continue;
-		}
+	    /*
+	     * uzfopen emits an error if the file is not found, so we dont.
+	     * uzfopen() also frees 'expanded' for us on error.
+	     */
+	    expanded = m_strdup(filename);
+	    if (!(fp = uzfopen(&expanded, irc_path, 1)))
+		continue;
 
-		/*
-		 * No, it is the "LOAD" command. so load it.
-		 */
-		{
-		int	in_comment 	=  0;
-		int	comment_line 	= -1;
-		int 	paste_line	= -1;
-		char *	real_start	= NULL;
+	    load_level[load_depth].filename = expanded;
+	    load_level[load_depth].line = 1;
+	    if (load_depth > 0 && load_level[load_depth - 1].package)
+	        malloc_strcpy(&load_level[load_depth].package,
+				load_level[load_depth-1].package);
 
-		current_row = NULL;
-		load_level[load_depth].filename = expanded;
-		load_level[load_depth].line = 1;
-		if (load_depth > 0 && load_level[load_depth - 1].package)
-			malloc_strcpy(&load_level[load_depth].package,
-					load_level[load_depth-1].package);
+	    loader(fp, expanded, sargs, &load_level[load_depth]);
 
-		for (;;load_level[load_depth].line++)
-		{
-			int     len;
-			char    *ptr;
-
-			if (!fgets(buffer, MAX_LINE_SIZE, fp))
-				break;
-
-			for (start = buffer; my_isspace(*start); start++)
-				;
-			if (!*start || *start == '#')
-				continue;
-
-			len = strlen(start);
-
-		/*
-		 * Original idea to allow \'s in scripts for continued
-		 * lines by Stargazer <spz@specklec.mpifr-bonn.mpg.de>
-		 * 
-		 * If we have \\ at the end of the line, that
-		 * should indicate that we DONT want the slash to 
-		 * escape the newline
-		 *
-		 * We cant just do start[len-2] because we cant say
-		 * what will happen if len = 1... (a blank line)
-		 *
-		 * SO.... 
-		 * If the line ends in a newline, and
-		 * If there are at least 2 characters in the line
-		 *	and the 2nd to the last one is a \ and,
-		 * If there are EITHER 2 characters on the line or
-		 *	the 3rd to the last character is NOT a \ and,
-		 * If the line isnt too big yet and,
-		 * If we can read more from the file,
-		 * THEN -- adjust the length of the string
-		 */
-			while ( (start[len-1] == '\n') && 
-				(len >= 2 && start[len-2] == '\\') &&
-				(len < 3 || start[len-3] != '\\') && 
-				(len < MAX_LINE_SIZE) && 
-				(fgets(&(start[len-2]), MAX_LINE_SIZE - len, fp)))
-			{
-				len = strlen(start);
-				load_level[load_depth].line++;
-			}
-
-			if (start[len - 1] == '\n')
-				start[--len] = '\0';
-
-
-			real_start = start;
-			while (start && *start)
-			{
-				char    *optr = start;
-
-				/* Skip slashed brackets */
-				while ((ptr = sindex(optr, "{};/")) && 
-				      ptr != optr && ptr[-1] == '\\')
-					optr = ptr + 1;
-
-				/* 
-				 * if no_semicolon is set, we will not attempt
-				 * to parse this line, but will continue
-				 * grabbing text
-				 */
-				if (no_semicolon)
-					no_semicolon = 0;
-
-				else if ((!ptr || 
-					(ptr != start || *ptr == '/')) && 
-					current_row)
-				{
-				    if (!paste_level)
-				    {
-					parse_line(NULL, current_row, 
-					   flag 
-					   ? args 
-					   : get_int_var(INPUT_ALIASES_VAR) 
-					     ? empty_string 
-					     : NULL,
-					   0, 0);
-					new_free(&current_row);
-				    }
-				    else if (!in_comment)
-					malloc_strcat(&current_row, ";");
-				}
-
-				if (ptr)
-				{
-				    char    c = *ptr;
-
-				    *ptr = 0;
-				    if (!in_comment)
-					malloc_strcat(&current_row, start);
-				    *ptr = c;
-
-				    switch (c)
-				    {
-
-/* switch statement tabbed back */
-case '/' :
-{
-	no_semicolon = 1;
-
-	/* 
-	 * If we're in a comment, any slashes that arent preceeded by
-	 * a star is just ignored (cause its in a comment, after all >;) 
-	 */
-	if (in_comment)
-	{
-		/* ooops! cant do ptr[-1] if ptr == optr... doh! */
-		if ((ptr > start) && (ptr[-1] == '*'))
-		{
-			in_comment = 0;
-			comment_line = -1;
-		}
-		break;
+	    new_free(&load_level[load_depth].filename);
+	    new_free(&load_level[load_depth].package);
+	    fclose(fp);
 	}
-
-	/* We're not in a comment... should we start one? */
-	/*
-	 * COMMENT_HACK (at the request of Kanan) determines 
-	 * whether C-like comments will be honored only at the
-	 * beginning of a line (if ON) or anywhere (if OFF).
-	 * This is needed because some older scripts (phoenix,
-	 * textbox, etc) may use slash-star in some ascii graphics.
-	 */
-	if ((ptr[1] == '*')
-		&& (!get_int_var(COMMENT_HACK_VAR) || ptr == real_start))
-	{
-		/* Yep. its the start of a comment. */
-		in_comment = 1;
-		comment_line = load_level[load_depth].line;
-	}
-	else
-	{
-		/* Its NOT a comment. Tack it on the end */
-		malloc_strcat(&current_row, "/");
-
-		/* Is the / is at the EOL? */
-		if (!ptr[1])
-		{
-		    /* If we are NOT in a block alias, */
-		    if (paste_level == 0)
-		    {
-			/* Send the line off to parse_line */
-			parse_line(NULL, current_row, flag 
-				 ? args 
-				 : get_int_var(INPUT_ALIASES_VAR) 
-				   ? empty_string 
-				   : NULL, 0, 0);
-
-			new_free(&current_row);
-		    }
-
-		    /* Just add semicolon and keep going */
-		    else
-			no_semicolon = 0;
-		}
-	}
-	break;
-}
-case '{' :
-{
-	if (in_comment)
-		break;
-
-#ifdef BRACE_LOAD_HACK
-	/*
-	 * left-brace is probably only introducing a new brace-set if it
-	 *	*) Leads off a line
-	 *	*) Is preceeded by whitespace
-	 *	*) Is not immediately following an rparen or rbrace
-	 * In any other such case, the { is taken as a literal character and
-	 * is not used for bracing.
-	 */
-	if (ptr > start && !isspace(ptr[-1]) && ptr[-1] != ')' &&
-		ptr[-1] != '}' && ptr[-1] != '{' && ptr[-1] != '(' &&
-		ptr[-1] != '$' && ptr[-1] != '%')
-	{
-		malloc_strcat(&current_row, "{");
-		if (paste_level)
-			no_semicolon = 0;
-		else
-			no_semicolon = 1;
-	}
-	else
-	{
-#endif
-		/* If we are opening a brand new {} pair, remember the line */
-		if (!paste_level)
-			paste_line = load_level[load_depth].line;
-
-		paste_level++;
-		if (ptr == start)
-			malloc_strcat(&current_row, " {");
-		else
-			malloc_strcat(&current_row, "{");
-		no_semicolon = 1;
-#ifdef BRACE_LOAD_HACK
-	}
-#endif
-	break;
-}
-case '}' :
-{
-	if (in_comment)
-		break;
-
-#ifdef BRACE_LOAD_HACK
-	/*
-	 * Same as above, only in reverse.  An rbrace is only taken as a
-	 * special character if it
-	 *	*) Ends a line
-	 *	*) Is followed by whitespace
-	 *	*) Is followed by a rparen or rbrace.
-	 * Otherwise, it is just a normal character.
-	 */
-	if (ptr == start || isspace(ptr[1]) || ptr[1] != '(' || ptr[1] != ')'
-		|| ptr[1] != '{' || ptr[1] != '}')
-	{
-#endif
-		if (!paste_level)
-		{
-			error("Unexpected } in %s, line %d",
-					expanded, load_level[load_depth].line);
-			break;
-		}
-
-		paste_level--;
-		/* If we're back to "level 0", then reset the paste line */
-		if (!paste_level)
-			paste_line = -1;
-		malloc_strcat(&current_row, "}");
-		no_semicolon = ptr[1] ? 1 : 0;
-		break;
-#ifdef BRACE_LOAD_HACK
-	}
-	else
-	{	
-		malloc_strcat(&current_row, "}");
-		if (paste_level)
-			no_semicolon = 0;
-		else
-			no_semicolon = 1;
-	}
-	break;
-#endif
-}
-case ';' :
-{
-	if (in_comment)
-		break;
-
-	malloc_strcat(&current_row, ";");
-	/*
-	 * I guess it was totaly wrong how ircII handled semicolons and
-	 * we wont attempt to out-guess the user.  Any semicolons are
-	 * left as-is.
-	 */
-	if (ptr[1] == 0 && !paste_level)
-	{
-		parse_line(NULL, current_row, flag ? args : 
-			get_int_var(INPUT_ALIASES_VAR) ? empty_string : NULL,
-			0, 0);
-		new_free(&current_row);
-	}
-	else if (ptr[1] == 0 && paste_level)
-		no_semicolon = 0;
-	else
-		no_semicolon = 1;
-
-	break;
-}
-/* End of reformatting */
-
-				    } /* End of switch */
-				    start = ptr+1;
-				}
-				else /* if (!ptr) -- eg, no special chars*/
-				{
-				    if (!in_comment)
-					malloc_strcat(&current_row, start);
-				    start = NULL;
-				}
-			} /* End of while (start && *start) */
-		} /* End of for(;;line++) */
-
-		if (in_comment)
-		  error("File %s ended with an unterminated comment in line %d",
-			expanded, comment_line);
-
-		if (current_row)
-		{
-		    if (paste_level)
-		    error("Unexpected EOF in %s trying to match '{' at line %d",
-			expanded, paste_line);
-		    else
-		        parse_line(NULL, current_row, flag ? args : 
-			   get_int_var(INPUT_ALIASES_VAR) ? empty_string : NULL,
-			   0, 0);
-
-		    new_free(&current_row);
-		}
-		} /* End of direct /LOAD command */
-
-		new_free(&expanded);
-		fclose(fp);
-
-	} /* End of while (args && *args) */
 
 	/*
 	 * Restore some sanity
@@ -1918,10 +1643,434 @@ case ';' :
 	permit_status_update(1);
 	update_all_status();
 
-	new_free(&load_level[load_depth].package);
 	load_depth--;
 }
 
+/* The "WHICH" loader */
+static void	loader_which (FILE *fp, const char *filename, char *subargs, struct load_info *loadinfo)
+{
+	loadinfo->loader = "which";
+	yell("%s", filename);
+}
+
+/* The "Standard" (legacy) loader */
+static void	loader_std (FILE *fp, const char *filename, char *subargs, struct load_info *loadinfo)
+{
+	int	in_comment, comment_line, no_semicolon;
+	int	paste_level, paste_line;
+	char 	*start, *real_start, *current_row;
+#define MAX_LINE_SIZE BIG_BUFFER_SIZE * 5
+	char	buffer[MAX_LINE_SIZE * 2 + 1];
+	char	*defargs;
+
+	loadinfo->loader = "std";
+
+	in_comment = 0;
+	comment_line = -1;
+	paste_level = 0;
+	paste_line = -1;
+	no_semicolon = 1;
+	real_start = NULL;
+	current_row = NULL;
+
+	for (;;loadinfo->line++)
+	{
+	    int     len;
+	    char    *ptr;
+
+	    if (!fgets(buffer, MAX_LINE_SIZE, fp))
+		break;
+
+	    for (start = buffer; my_isspace(*start); start++)
+		;
+
+	    if (!*start || *start == '#')
+		continue;
+
+	    len = strlen(start);
+
+	    /*
+	     * Original idea to allow \'s in scripts for continued
+	     * lines by Stargazer <spz@specklec.mpifr-bonn.mpg.de>
+	     * 
+	     * If we have \\ at the end of the line, that
+	     * should indicate that we DONT want the slash to 
+	     * escape the newline
+	     *
+	     * We cant just do start[len-2] because we cant say
+	     * what will happen if len = 1... (a blank line)
+	     *
+	     * SO.... 
+	     * If the line ends in a newline, and
+	     * If there are at least 2 characters in the line
+	     *	and the 2nd to the last one is a \ and,
+	     * If there are EITHER 2 characters on the line or
+	     *	the 3rd to the last character is NOT a \ and,
+	     * If the line isnt too big yet and,
+	     * If we can read more from the file,
+	     * THEN -- adjust the length of the string
+	     */
+	    while ( (start[len-1] == '\n') && 
+			(len >= 2 && start[len-2] == '\\') &&
+			(len < 3 || start[len-3] != '\\') && 
+		        (len < MAX_LINE_SIZE) && 
+			(fgets(&(start[len-2]), MAX_LINE_SIZE - len, fp)))
+	    {
+		len = strlen(start);
+		loadinfo->line++;
+	    }
+
+	    if (start[len-1] == '\n')
+		start[--len] = 0;
+
+	    real_start = start;
+	    while (start && *start)
+	    {
+		char    *optr = start;
+
+		/* Skip slashed brackets */
+		while ((ptr = sindex(optr, "{};/")) && 
+			ptr != optr && ptr[-1] == '\\')
+		    optr = ptr + 1;
+
+		/* 
+		 * if no_semicolon is set, we will not attempt
+		 * to parse this line, but will continue
+		 * grabbing text
+		 */
+		if (no_semicolon)
+		    no_semicolon = 0;
+
+		else if ((!ptr || (ptr != start || *ptr == '/')) && 
+							current_row)
+		{
+		    if (!paste_level)
+		    {
+			if (subargs)
+			    defargs = subargs;
+			else if (get_int_var(INPUT_ALIASES_VAR))
+			    defargs = empty_string;
+			else
+			    defargs = NULL;
+
+			parse_line(NULL, current_row, defargs, 0, 0);
+			new_free(&current_row);
+		    }
+		    else if (!in_comment)
+			malloc_strcat(&current_row, ";");
+		}
+
+		if (ptr)
+		{
+		    char    c = *ptr;
+
+		    *ptr = 0;
+		    if (!in_comment)
+			malloc_strcat(&current_row, start);
+		    *ptr = c;
+
+		    switch (c)
+		    {
+
+		    case '/' :
+		    {
+			no_semicolon = 1;
+			
+			/* 
+			 * If we're in a comment, any slashes that arent 
+			 * preceeded by a star is just ignored (cause its 
+			 * in a comment, after all >;) 
+			 */
+			if (in_comment)
+			{
+			    /* oops! cant do ptr[-1] if ptr == optr. doh! */
+			    if ((ptr > start) && (ptr[-1] == '*'))
+			    {
+				in_comment = 0;
+				comment_line = -1;
+			    }
+			    break;
+			}
+			
+			/* We're not in a comment... should we start one? */
+			/*
+			 * COMMENT_HACK (at the request of Kanan) determines 
+			 * whether C-like comments will be honored only at the
+			 * beginning of a line (if ON) or anywhere (if OFF).
+			 * This is needed because some older scripts (phoenix,
+			 * textbox, etc) may use slash-star in some ascii 
+			 * graphics.
+			 */
+			if ((ptr[1] == '*') && 
+			    (!get_int_var(COMMENT_HACK_VAR) || 
+			     ptr == real_start))
+			{
+			    /* Yep. its the start of a comment. */
+			    in_comment = 1;
+			    comment_line = loadinfo->line;
+			}
+			else
+			{
+			    /* Its NOT a comment. Tack it on the end */
+			    malloc_strcat(&current_row, "/");
+
+			    /* Is the / is at the EOL? */
+			    if (!ptr[1])
+			    {
+				/* If we are NOT in a block alias, */
+				if (paste_level == 0)
+				{
+				    if (subargs)
+					defargs = subargs;
+				    else if (get_int_var(INPUT_ALIASES_VAR))
+					defargs = empty_string;
+				    else
+					defargs = NULL;
+
+				    parse_line(NULL, current_row, defargs, 0,0);
+				    new_free(&current_row);
+				}
+
+				/* Just add semicolon and keep going */
+				else
+				    no_semicolon = 0;
+			     }
+			}
+			break;
+		    }
+
+		    /* switch statement tabbed back */
+		    case '{' :
+		    {
+			if (in_comment)
+			    break;
+
+#ifdef BRACE_LOAD_HACK
+			/*
+			 * left-brace is probably only introducing a new 
+			 * brace-set if it
+			 *	*) Leads off a line
+			 * 	*) Is preceeded by whitespace
+			 *	*) Is not immediately following an rparen 
+			 * 	   or rbrace
+			 * In any other such case, the { is taken as a 
+			 * literal character and is not used for bracing. }
+			 */
+			if (ptr > start && 
+			    !isspace(ptr[-1]) && 
+			    ptr[-1] != ')' &&
+			    ptr[-1] != '{' && 
+			    ptr[-1] != '}' && 
+			    ptr[-1] != '(' &&
+			    ptr[-1] != '$' && 
+			    ptr[-1] != '%')
+			{
+			    malloc_strcat(&current_row, "{");
+			    if (paste_level)
+				no_semicolon = 0;
+			    else
+				no_semicolon = 1;
+			}
+			else
+#endif
+			{
+			    /* 
+			     * If we are opening a brand new {} pair, 
+			     * remember the line
+			     */
+			    if (!paste_level)
+				paste_line = loadinfo->line;
+
+			    paste_level++;
+			    if (ptr == start)
+				malloc_strcat(&current_row, " {");
+			    else
+				malloc_strcat(&current_row, "{");
+			    no_semicolon = 1;
+			}
+			break;
+		    }
+		    case '}' :
+		    {
+			if (in_comment)
+			    break;
+
+#ifdef BRACE_LOAD_HACK
+			/*
+			 * Same as above, only in reverse.  An rbrace is 
+			 * only taken as a special character if it
+			 *	*) Ends a line
+			 *	*) Is followed by whitespace
+			 *	*) Is followed by a rparen or rbrace.
+			 * Otherwise, it is just a normal character.
+			 */
+			if (ptr == start || 
+			    isspace(ptr[1]) || 
+			    ptr[1] != '(' || 
+			    ptr[1] != ')' || 
+			    ptr[1] != '{' || 
+			    ptr[1] != '}')
+#endif
+			{
+			    if (!paste_level)
+			    {
+				error("Unexpected } in %s, line %d",
+					filename, loadinfo->line);
+				break;
+			    }
+
+			    paste_level--;
+			    /* 
+			     * If we're back to "level 0", then reset 
+			     * the paste line
+			     */
+			    if (!paste_level)
+				paste_line = -1;
+			    malloc_strcat(&current_row, "}");
+			    no_semicolon = ptr[1] ? 1 : 0;
+			}
+#ifdef BRACE_LOAD_HACK
+			else
+			{	
+			    malloc_strcat(&current_row, "}");
+			    if (paste_level)
+				no_semicolon = 0;
+			    else
+				no_semicolon = 1;
+			}
+#endif
+			break;
+		    }
+		    case ';':
+		    {
+			if (in_comment)
+			    break;
+			
+			malloc_strcat(&current_row, ";");
+			/*
+			 * I guess it was totaly wrong how ircII 
+			 * handled semicolons and we wont attempt to 
+			 * out-guess the user.  Any semicolons are
+			 * left as-is.
+			 */
+			if (ptr[1] == 0 && !paste_level)
+			{
+			    if (subargs)
+				defargs = subargs;
+			    else if (get_int_var(INPUT_ALIASES_VAR))
+				defargs = empty_string;
+			    else
+				defargs = NULL;
+			
+			    parse_line(NULL, current_row, defargs, 0, 0);
+			    new_free(&current_row);
+			}
+			else if (ptr[1] == 0 && paste_level)
+			    no_semicolon = 0;
+			else
+			    no_semicolon = 1;
+
+			break;
+		    }
+
+		    } /* End of switch */
+		    start = ptr+1;
+		}
+		else /* if (!ptr) -- eg, no special chars*/
+		{
+		    if (!in_comment)
+			malloc_strcat(&current_row, start);
+		    start = NULL;
+		}
+	    } /* End of while (start && *start) */
+	} /* End of for(;;line++) */
+
+	if (in_comment)
+	    error("File %s ended with an unterminated comment in line %d",
+			filename, comment_line);
+
+	if (current_row)
+	{
+	    if (paste_level)
+		error("Unexpected EOF in %s trying to match '{' at line %d",
+				filename, paste_line);
+	    else
+	    {
+		if (subargs)
+		    defargs = subargs;
+		else if (get_int_var(INPUT_ALIASES_VAR))
+		    defargs = empty_string;
+		else
+		    defargs = NULL;
+
+		parse_line(NULL, current_row, defargs, 0, 0);
+	    }
+
+	    new_free(&current_row);
+	}
+}
+
+static void	loader_pf (FILE *fp, const char *filename, char *subargs, struct load_info *loadinfo)
+{
+	char *	buffer;
+	int	bufsize, pos;
+	int	this_char, newline, comment;
+
+	loadinfo->loader = "pf";
+
+	bufsize = 8192;
+	buffer = new_malloc(bufsize);
+	pos = 0;
+	newline = 0;
+	comment = 0;
+
+	this_char = fgetc(fp);
+	while (!feof(fp))
+	{
+	    do
+	    {
+		/* At a newline, turn on eol handling, turn off comment. */
+		if (this_char == '\n') {
+		    newline = 1;
+		    comment = 0;
+		    break;
+		}
+
+		/* If we are in a comment, ignore this character. */
+		if (comment)
+		    break;
+
+		/* If we last saw an eol, ignore any following spaces */
+		if (newline && isspace(this_char))
+		    break;
+
+		/* If we last saw an eol, a # starts a one-line comment. */
+		if (newline && this_char == '#') {
+		    comment = 1;
+		    break;
+		}
+
+		/* We are no longer at a newline */
+		newline = 0;
+
+		/* Append this character to the buffer */
+		buffer[pos++] = this_char;
+
+	    } while (0);
+
+	    if (pos >= bufsize - 20) {
+		bufsize *= 2;
+		new_realloc((void **)&buffer, bufsize);
+	    }
+
+	    this_char = fgetc(fp);
+	}
+
+	buffer[pos] = 0;
+	if (subargs == NULL)
+	    subargs = empty_string;
+	parse_line(NULL, buffer, subargs, 0, 0);
+}
 
 /*
  * The /me command.  Does CTCP ACTION.  Dont ask me why this isnt the
@@ -2649,13 +2798,13 @@ BUILT_IN_COMMAND(xtypecmd)
 					input_add_character(*args, empty_string);
 			}
 			else
-				say ("Unknown flag -%s to XTYPE", arg);
+				say("Unknown flag -%s to XTYPE", arg);
 			return;
 		}
 		input_add_character(saved, empty_string);
 	}
 	else
-		type(command, args, empty_string);
+		typecmd(command, args, empty_string);
 	return;
 }
 
@@ -2994,7 +3143,7 @@ static void	eval_inputlist (char *args, char *line)
 	parse_line(NULL, args, line ? line : empty_string, 0, 0);
 }
 
-GET_FIXED_ARRAY_NAMES_FUNCTION(get_command, irc_command);
+GET_FIXED_ARRAY_NAMES_FUNCTION(get_command, irc_command)
 
 /* 
  * This is a key binding and has to be here because it looks at the

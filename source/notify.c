@@ -1,4 +1,4 @@
-/* $EPIC: notify.c,v 1.11.2.1 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: notify.c,v 1.11.2.2 2003/03/24 17:53:01 wd Exp $ */
 /*
  * notify.c: a few handy routines to notify you when people enter and leave irc 
  *

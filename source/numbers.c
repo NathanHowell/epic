@@ -1,4 +1,4 @@
-/* $EPIC: numbers.c,v 1.32.2.1 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: numbers.c,v 1.32.2.2 2003/03/24 17:53:01 wd Exp $ */
 /*
  * numbers.c: handles all those strange numeric response dished out by that
  * wacky, nutty program we call ircd 
@@ -55,6 +55,8 @@
 #include "who.h"
 #include "alias.h"
 
+static void	add_user_who (int refnum, const char *from, const char *comm, const char **ArgList);
+static void	add_user_end (int refnum, const char *from, const char *comm, const char **ArgList);
 static 	int	number_of_bans = 0;
 
 /*
@@ -437,10 +439,24 @@ void 	numbered_command (const char *from, const char *comm, char const **ArgList
 		/* If we're waiting for MODE reply. */
 		if (channel_is_syncing(channel, from_server))
 		{
-			update_channel_mode(channel, mode);
-			update_all_status();
+		    char *	copy = LOCAL_COPY(channel);
+		    int	numonchannel, maxnum;
+
+		    update_channel_mode(channel, mode);
+		    update_all_status();
+
+		    maxnum = get_server_max_cached_chan_size(from_server);
+		    if (maxnum >= 0)
+		    {
+			numonchannel = number_on_channel(copy, from_server);
+			if (numonchannel <= maxnum)
+			    whobase(from_server, copy, add_user_who, 
+						add_user_end);
+			else
+			    channel_not_waiting(copy, from_server);
+		    }
 #if 0
-			goto END;
+		    goto END;
 #endif
 		}
 
@@ -1484,7 +1500,7 @@ END:
 
 		if (oper_command)
 			oper_command = 0;
-		else
+		else if (!is_server_registered(from_server))
 		{
 			server_reconnects_to(from_server, NOSERV);
 			say("Password required for connection to server %s",
@@ -1505,4 +1521,39 @@ END:
 	message_from(NULL, LOG_CURRENT);
 }
 
+
+static void	add_user_who (int refnum, const char *from, const char *comm, const char **ArgList)
+{
+	const char 	*channel, *user, *host, *server, *nick;
+	char 	*userhost;
+
+	if (!(channel = ArgList[0]))
+		{ rfc1459_odd(from, "*", ArgList); return; }
+	if (!(user = ArgList[1]))
+		{ rfc1459_odd(from, "*", ArgList); return; }
+	if (!(host = ArgList[2]))
+		{ rfc1459_odd(from, "*", ArgList); return; }
+	if (!(server = ArgList[3]))
+		{ rfc1459_odd(from, "*", ArgList); return; }
+	if (!(nick = ArgList[4]))
+		{ rfc1459_odd(from, "*", ArgList); return; }
+
+	/* Obviously this is safe. */
+	userhost = alloca(strlen(user) + strlen(host) + 2);
+	sprintf(userhost, "%s@%s", user, host);
+	add_userhost_to_channel(channel, nick, refnum, userhost);
+}
+
+static void	add_user_end (int refnum, const char *from, const char *comm, const char **ArgList)
+{
+	char *	copy;
+	char *	channel;
+
+	if (!ArgList[0])
+		{ rfc1459_odd(from, "*", ArgList); return; }
+
+	copy = LOCAL_COPY(ArgList[0]);
+	channel = next_arg(copy, &copy);
+	channel_not_waiting(channel, refnum);
+}
 

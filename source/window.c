@@ -1,4 +1,4 @@
-/* $EPIC: window.c,v 1.47.2.1 2003/02/27 15:29:57 wd Exp $ */
+/* $EPIC: window.c,v 1.47.2.2 2003/03/24 17:53:02 wd Exp $ */
 /*
  * window.c: Handles the organzation of the logical viewports (``windows'')
  * for irc.  This includes keeping track of what windows are open, where they
@@ -108,6 +108,13 @@ const	char	*who_from = (char *) 0;
  */
 	unsigned window_display = 1;
 
+/*
+ * Each time a window is made the current window, it grabs this value and
+ * increments it.  We use this value to track "current window"-ness in
+ * various contexts.
+ */
+	unsigned current_window_priority = 1;
+
 static 	void 	remove_from_invisible_list 	(Window *);
 static 	void 	swap_window 			(Window *, Window *);
 static	Window	*get_next_window  		(Window *);
@@ -120,7 +127,12 @@ static 	Window *window_previous 		(Window *, char **);
 static	void 	set_screens_current_window 	(Screen *, Window *);
 static	void 	remove_window_from_screen (Window *window, int hide);
 static 	Window *window_discon (Window *window, char **args);
+static 	void	window_scrollback_start (Window *window);
 static 	void	window_scrollback_end (Window *window);
+static void	window_scrollback_backward (Window *window);
+static void	window_scrollback_forward (Window *window);
+static void	window_scrollback_backwards_lines (Window *window, int);
+static void	window_scrollback_forwards_lines (Window *window, int);
 static 	void 	window_scrollback_to_string (Window *window, regex_t *str);
 static 	void 	window_scrollforward_to_string (Window *window, regex_t *str);
 	int	change_line (Window *window, const unsigned char *str);
@@ -164,6 +176,7 @@ Window	*new_window (Screen *screen)
 		new_w->server = NOSERV;
 	new_w->last_server = NOSERV;
 
+	new_w->priority = -1;		/* Filled in later */
 	new_w->top = 0;			/* Filled in later */
 	new_w->bottom = 0;		/* Filled in later */
 	new_w->cursor = -1;		/* Force a clear-screen */
@@ -412,7 +425,6 @@ delete_window_contents:
 	else
 		strmcpy(buffer, ltoa(window->refnum), BIG_BUFFER_SIZE);
 	oldref = window->refnum;
-
 
 	/*
 	 * Clean up after the window's internal data.
@@ -1581,6 +1593,25 @@ Window *get_window_by_name (const char *name)
 char *	get_refnum_by_window (const Window *w)
 {
 	return ltoa(w->refnum);
+}
+
+int	get_winref_by_servref (int servref)
+{
+	Window *tmp = NULL;
+	Window *best = NULL;
+
+	while (traverse_all_windows(&tmp))
+	{
+	    if (tmp->server != servref && tmp->last_server != servref)
+		continue;
+	    if (best == NULL || best->priority < tmp->priority)
+		best = tmp;
+	}
+
+	if (best)
+		return best->refnum;
+	else
+		return -1;
 }
 
 /*
@@ -4122,6 +4153,56 @@ static	Window *window_scrollback (Window *window, char **args)
 	return window;
 }
 
+static	Window *window_scroll_backward (Window *window, char **args)
+{
+	int	val;
+
+	if (args && *args && **args)
+	{
+		val = get_number("SCROLL_BACKWARD", args);
+
+		if (val == 0)
+			window_scrollback_backward(window);
+		else
+			window_scrollback_backwards_lines(window, val);
+	}
+	else
+		window_scrollback_backward(window);
+
+	return window;
+}
+
+static	Window *window_scroll_end (Window *window, char **args)
+{
+	window_scrollback_end(window);
+	return window;
+}
+
+static	Window *window_scroll_forward (Window *window, char **args)
+{
+	int	val;
+
+	if (args && *args && **args)
+	{
+		val = get_number("SCROLL_FORWARD", args);
+
+		if (val == 0)
+			window_scrollback_forward(window);
+		else
+			window_scrollback_forwards_lines(window, val);
+	}
+	else
+		window_scrollback_forward(window);
+
+	return window;
+}
+
+static	Window *window_scroll_start (Window *window, char **args)
+{
+	window_scrollback_start(window);
+	return window;
+}
+
 regex_t *last_regex = NULL;
 
 static int	new_search_term (const char *arg)
@@ -4482,6 +4563,10 @@ static const window_ops options [] = {
 	{ "SCRATCH",		window_scratch		},
 	{ "SCROLL",		window_scroll		},
 	{ "SCROLLBACK",		window_scrollback	}, /* * */
+	{ "SCROLL_BACKWARD",	window_scroll_backward	},
+	{ "SCROLL_END",		window_scroll_end	},
+	{ "SCROLL_FORWARD",	window_scroll_forward	},
+	{ "SCROLL_START",	window_scroll_start	},
 	{ "SEARCH_BACK",	window_search_back	},
 	{ "SEARCH_FORWARD",	window_search_forward	},
 	{ "SERVER",		window_server 		},
@@ -5028,6 +5113,8 @@ static void 	set_screens_current_window (Screen *screen, Window *window)
 	}
 	if (current_window != window)
 		make_window_current(window);
+
+	window->priority = current_window_priority++;
 
 #if 0		/* Can we get away with not doing this? */
 	update_all_windows();

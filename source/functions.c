@@ -1,4 +1,4 @@
-/* $EPIC: functions.c,v 1.90.2.2 2003/02/27 15:29:55 wd Exp $ */
+/* $EPIC: functions.c,v 1.90.2.3 2003/03/24 17:53:00 wd Exp $ */
 /*
  * functions.c -- Built-in functions for ircII
  *
@@ -1556,7 +1556,7 @@ BUILT_IN_FUNCTION(function_channels, input)
  		if ((window = get_window_by_desc(input)))
 			server = window->server;
 		else if (*input == '#')
-			if (window = get_window_by_desc(input + 1))
+			if ((window = get_window_by_desc(input + 1)))
 				server = window->server;
 	}
 
@@ -2564,7 +2564,7 @@ char *function_push (char *word)
 	GET_STR_ARG(var, word);
 	upper(var);
 	value = get_variable(var);
-	m_s3cat(&value, space, word);
+	m_s3cat_s(&value, space, word);
 	add_variable(var, value, 0, 0);
 	return value;
 }
@@ -3442,8 +3442,12 @@ BUILT_IN_FUNCTION(function_fexist, words)
         Filename expanded;
 	char	*filename;
 
+#if 1
+	filename = words;
+#else
 	if (!(filename = new_next_arg(words, &words)))
 		RETURN_INT(-1);
+#endif
 
 	if (normalize_filename(filename, expanded))
 		RETURN_INT(-1);
@@ -3459,7 +3463,12 @@ BUILT_IN_FUNCTION(function_fsize, words)
 	Filename expanded;
 	char *	filename;
 
-	if (!(filename = new_next_arg(words, &words)))
+#if 1
+	filename = words;
+#else
+	filename = new_next_arg(words, &words);
+#endif
+	if (!filename)
 		RETURN_INT(-1);
 
 	if (normalize_filename(filename, expanded))
@@ -6137,7 +6146,7 @@ BUILT_IN_FUNCTION(function_notifywindows, input)
 
 BUILT_IN_FUNCTION(function_loadinfo, input)
 {
-	return m_sprintf("%d %s", current_line(), current_filename());
+	return m_sprintf("%d %s %s", current_line(), current_filename(), current_loader());
 }
 
 BUILT_IN_FUNCTION(function_wordtoindex, input)

@@ -1,4 +1,4 @@
-/* $EPIC: timer.c,v 1.10.2.1 2003/02/27 15:29:57 wd Exp $ */
+/* $EPIC: timer.c,v 1.10.2.2 2003/03/24 17:53:02 wd Exp $ */
 /*
  * timer.c -- handles timers in ircII
  *
@@ -54,6 +54,7 @@
 static int 	timer_exists (const char *ref);
 static int 	remove_timer (const char *ref);
 static void 	remove_all_timers (void);
+static	void	remove_window_timers (int winref);
 static	void	list_timers (const char *command);
 
 /*
@@ -81,7 +82,16 @@ BUILT_IN_COMMAND(timercmd)
 		flag = next_arg(args, &args);
 		len = strlen(flag + 1);
 
-		if (!my_strnicmp(flag + 1, "DELETE", len))
+		if (!my_strnicmp(flag + 1, "DELETE_FOR_WINDOW", len))
+		{
+			int	winref;
+
+			if (!(ptr = next_arg(args, &args)) || !is_number(ptr))
+			    say("%s: Need a window number for -DELETE_FOR_WINDOW", command);
+			winref = atol(ptr);
+			remove_window_timers(winref);
+		}
+		else if (!my_strnicmp(flag + 1, "DELETE", len))
 		{
 			if (!(ptr = next_arg(args, &args)))
 			    say("%s: Need a timer reference number for -DELETE",
@@ -479,6 +489,22 @@ static void 	remove_all_timers (void)
 	}
 }
 
+static	void	remove_window_timers (int winref)
+{
+	Timer *ref, *next;
+
+	for (ref = PendingTimers; ref; ref = next)
+	{
+		next = ref->next;
+		if (ref->command)
+			continue;
+		if (ref->window != winref)
+			continue;
+		unlink_timer(ref);
+		delete_timer(ref);
+	}
+}
+
 
 /*
  * You call this to register a timer callback.
@@ -508,6 +534,7 @@ char *add_timer (int update, const char *refnum_want, double interval, long even
 	Timer	*ntimer, *otimer = NULL;
 	char	refnum_got[REFNUM_MAX + 1];
 	Timeval now;
+	char *	retval;
 
 	now = get_time(NULL);
 
@@ -574,7 +601,8 @@ char *add_timer (int update, const char *refnum_want, double interval, long even
 	}
 
 	schedule_timer(ntimer);
-	return ntimer->ref;
+	retval = ntimer->ref;
+	return retval;		/* Eliminates a specious warning from gcc */
 }
 
 
@@ -583,7 +611,7 @@ char *add_timer (int update, const char *refnum_want, double interval, long even
  * TimerTimeout:  Called from irc_io to help create the timeout
  * part of the call to select.
  */
-Timeval	TimerTimeout (void)
+const Timeval	TimerTimeout (void)
 {
 	Timeval	forever = {9999, 0};
 	Timeval right_away = {0, 0};

@@ -1,4 +1,4 @@
-/* $EPIC: server.c,v 1.73.2.1 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: server.c,v 1.73.2.2 2003/03/24 17:53:02 wd Exp $ */
 /*
  * server.c:  Things dealing with that wacky program we call ircd.
  *
@@ -143,6 +143,8 @@ void 	add_to_server_list (const char *server, int port, const char *password, co
 		s->registered = 0;
 		s->eof = 0;
 		s->port = port;
+		s->line_length = IRCD_BUFFER_SIZE;
+		s->max_cached_chan_size = -1;
 		s->who_queue = NULL;
 		s->ison_queue = NULL;
 		s->userhost_queue = NULL;
@@ -179,6 +181,7 @@ void 	add_to_server_list (const char *server, int port, const char *password, co
 
 		s->funny_match = NULL;
 
+		s->try_ssl = FALSE;
 		s->ssl_enabled = FALSE;
 		s->ssl_fd = NULL;
 
@@ -898,7 +901,8 @@ void	do_server (fd_set *rd, fd_set *wd)
 		FD_CLR(des, rd);	/* Make sure it never comes up again */
 
 		last_server = from_server = i;
-		junk = dgets(bufptr, des, 1, s->ssl_fd);
+		junk = dgets(des, bufptr, get_server_line_length(from_server), 
+				1, s->ssl_fd);
 
 		switch (junk)
  		{
@@ -1145,7 +1149,7 @@ static int 	connect_to_server (int new_server)
 		if ((s = get_server(new_server)))
 		{
 		    say("Unable to connect to port %d of server %s: [%d] %s", 
-				s->port, s->name, des, my_strerror(errno));
+				s->port, s->name, des, my_strerror(des, errno));
 
 		    /* Would cause client to crash, if not wiped out */
 		    set_server_ssl_enabled(new_server, FALSE);
@@ -1646,6 +1650,7 @@ static char *do_umode (int refnum)
 	Server *s;
 	char *c;
 	long flags, flags2, i;
+	char *retval;
 
 	if (!(s = get_server(refnum)))
 		return empty_string;
@@ -1669,7 +1674,9 @@ static char *do_umode (int refnum)
 	}
 
 	*c = 0;
-	return s->umode;
+
+	retval = s->umode;
+	return retval;		/* eliminates a specious warning from gcc */
 }
 
 const char *	get_possible_umodes (int refnum)
@@ -1695,11 +1702,13 @@ void	set_possible_umodes (int refnum, const char *umodes)
 const char *	get_umode (int refnum)
 {
 	Server *s;
+	char *	retval;
 
 	if (!(s = get_server(refnum)))
 		return empty_string;
 
-	return s->umode;
+	retval = s->umode;
+	return retval;		/* Eliminates a specious warning from gcc. */
 }
 
 void 	clear_user_modes (int refnum)
@@ -2589,6 +2598,8 @@ IACCESSOR(v, nickname_pending)
 IACCESSOR(v, sent)
 IACCESSOR(v, version)
 IACCESSOR(v, save_channels)
+IACCESSOR(v, line_length)
+IACCESSOR(v, max_cached_chan_size)
 SACCESSOR(chan, invite_channel, NULL)
 SACCESSOR(nick, last_notify_nick, NULL)
 SACCESSOR(nick, joined_nick, NULL)
@@ -2944,6 +2955,9 @@ char 	*serverctl 	(char *input)
 		if (!my_strnicmp(listc, "AWAY", len)) {
 			ret = get_server_away(refnum);
 			RETURN_STR(ret);
+		} else if (!my_strnicmp(listc, "MAXCACHESIZE", len)) {
+			num = get_server_max_cached_chan_size(refnum);
+			RETURN_INT(num);
 		} else if (!my_strnicmp(listc, "CONNECTED", len)) {
 			num = is_server_registered(refnum);
 			RETURN_INT(num);
@@ -3007,6 +3021,11 @@ char 	*serverctl 	(char *input)
 		len = strlen(listc);
 		if (!my_strnicmp(listc, "AWAY", len)) {
 			set_server_away(refnum, input);
+			RETURN_INT(1);
+		} else if (!my_strnicmp(listc, "MAXCACHESIZE", len)) {
+			int	size;
+			GET_INT_ARG(size, input);
+			set_server_max_cached_chan_size(refnum, size);
 			RETURN_INT(1);
 		} else if (!my_strnicmp(listc, "CONNECTED", len)) {
 			RETURN_EMPTY;		/* Read only. */
@@ -3106,5 +3125,4 @@ void 	got_my_userhost (int refnum, UserhostItem *item, const char *nick, const c
 	set_server_userhost(refnum, freeme);
 	new_free(&freeme);
 }
-
 

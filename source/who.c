@@ -1,4 +1,4 @@
-/* $EPIC: who.c,v 1.12.2.1 2003/02/27 15:29:57 wd Exp $ */
+/* $EPIC: who.c,v 1.12.2.2 2003/03/24 17:53:02 wd Exp $ */
 /*
  * who.c -- The WHO queue.  The ISON queue.  The USERHOST queue.
  *
@@ -502,7 +502,7 @@ static	int	last_width = -1;
 			"didn't get one back. ###");
 
 	/* Who replies always go to the current window. */
-	message_from(NULL, LOG_CRAP);
+	message_from(new_w->who_target, LOG_CRAP);
 
 do
 {
@@ -632,7 +632,7 @@ void	xwhoreply (int refnum, const char *from, const char *comm, const char **Arg
 			"even though you didn't ask for one. ###");
 
 	/* Who replies always go to the current window */
-	message_from(NULL, LOG_CRAP);
+	message_from(new_w->who_target, LOG_CRAP);
 
 	PasteArgs(ArgList, 0);
 	if (do_hook(current_numeric, "%s", ArgList[0]))
@@ -652,7 +652,7 @@ void	who_end (int refnum, const char *from, const char *comm, const char **ArgLi
 	if (!new_w)
 		return;	
 
-	message_from(NULL, LOG_CRAP);
+	message_from(new_w->who_target, LOG_CRAP);
 	do
 	{
 		/* Defer to another function, if neccesary.  */
@@ -718,7 +718,7 @@ int	fake_who_end (int refnum, const char *from, const char *comm, const char *wh
 		who_target = target;
 	}
 
-	message_from(NULL, LOG_CRAP);
+	message_from(new_w->who_target, LOG_CRAP);
 	do
 	{
 		/* Defer to another function, if neccesary.  */
@@ -1276,16 +1276,19 @@ void	userhost_returned (int refnum, const char *from, const char *comm, const ch
 
 void	userhost_cmd_returned (int refnum, UserhostItem *stuff, const char *nick, const char *text)
 {
-	char	args[BIG_BUFFER_SIZE + 1];
+	char	*args = NULL;
+	size_t	clue = 0;
 
 	/* This should be safe, though its playing it fast and loose */
-	strcpy(args, stuff->nick ? stuff->nick : empty_string);
-	strcat(args, stuff->oper ? " + " : " - ");
-	strcat(args, stuff->away ? "+ " : "- ");
-	strcat(args, stuff->user ? stuff->user : empty_string);
-	strcat(args, space);
-	strcat(args, stuff->host ? stuff->host : empty_string);
+	malloc_strcat_c(&args, stuff->nick ? stuff->nick : empty_string, &clue);
+	malloc_strcat_c(&args, stuff->oper ? " + " : " - ", &clue);
+	malloc_strcat_c(&args, stuff->away ? "+ " : "- ", &clue);
+	malloc_strcat_c(&args, stuff->user ? stuff->user : empty_string, &clue);
+	malloc_strcat_c(&args, space, &clue);
+	malloc_strcat_c(&args, stuff->host ? stuff->host : empty_string, &clue);
 	parse_line(NULL, text, args, 0, 0);
+
+	new_free(&args);
 }
 
 void	clean_server_queues (int i)

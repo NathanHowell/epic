@@ -1,4 +1,4 @@
-/* $EPIC: status.c,v 1.13.2.1 2003/02/27 15:29:57 wd Exp $ */
+/* $EPIC: status.c,v 1.13.2.2 2003/03/24 17:53:02 wd Exp $ */
 /*
  * status.c: handles the status line updating, etc for IRCII 
  *
@@ -561,6 +561,9 @@ int	make_status (Window *window, int must_redraw)
 		 */
 		for (i = 0; i < MAX_FUNCTIONS; i++)
 		{
+			if (window->screen == NULL)
+				return -1;
+
 			if (window->status.line[line].func[i] == NULL)
 				panic("status callback null.  Window [%d], line [%d], function [%d]", window->refnum, line, i);
 			func_value[i] = window->status.line[line].func[i]
@@ -1414,13 +1417,14 @@ STATUS_FUNCTION(status_position)
 {
 	static char my_buffer[81];
 
-	snprintf(my_buffer, 80, "(%d-%d)", 
+	snprintf(my_buffer, 80, "(%d-%d[%d/%d])", 
+			window->distance_from_display_ip,
+			window->display_size, window->hold_mode, 
+			window->autohold);
 #if 0
 			window->screen->input_line,
 			window->screen->input_cursor);
 #endif
-			window->distance_from_display_ip,
-			window->display_size);
 	return my_buffer;
 }
 

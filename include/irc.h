@@ -141,8 +141,8 @@ extern 		ISA *	LocalIPv4Addr;
 #ifdef INET6
 extern		ISA6 *	LocalIPv6Addr;
 #endif
-extern		fd_set  readables;
-extern		fd_set  writables;
+extern		fd_set  readables, held_readables;
+extern		fd_set  writables, held_writables;
 extern struct timeval 	start_time;
 extern struct timeval	idle_time;
 extern struct timeval	now;
@@ -159,6 +159,7 @@ extern struct timeval	input_timeout;
 #include "reg.h"
 	void	dump_load_stack		(int);	 /* XXX command.c */
 const	char *	current_filename	(void);  /* XXX command.c */
+const	char *	current_loader		(void);	 /* XXX command.c */
 	int	current_line		(void);	 /* XXX command.c */
 	char *	current_package		(void);  /* XXX command.c */
 #endif /* __irc_h */

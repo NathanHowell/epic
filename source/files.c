@@ -1,4 +1,4 @@
-/* $EPIC: files.c,v 1.15.2.1 2003/02/27 15:29:55 wd Exp $ */
+/* $EPIC: files.c,v 1.15.2.2 2003/03/24 17:53:00 wd Exp $ */
 /*
  * files.c -- allows you to read/write files. Wow.
  *

@@ -1,4 +1,4 @@
-/* $EPIC: if.c,v 1.14.2.2 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: if.c,v 1.14.2.3 2003/03/24 17:53:01 wd Exp $ */
 /*
  * if.c: the IF, WHILE, FOREACH, DO, FE, FEC, and FOR commands for IRCII 
  *

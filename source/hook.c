@@ -1,4 +1,4 @@
-/* $EPIC: hook.c,v 1.13.2.1 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: hook.c,v 1.13.2.2 2003/03/24 17:53:01 wd Exp $ */
 /*
  * hook.c: Does those naughty hook functions. 
  *

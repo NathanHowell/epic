@@ -1,4 +1,4 @@
-/* $EPIC: dcc.c,v 1.40.2.1 2003/02/27 15:29:55 wd Exp $ */
+/* $EPIC: dcc.c,v 1.40.2.2 2003/03/24 17:53:00 wd Exp $ */
 /*
  * dcc.c: Things dealing client to client connections. 
  *
@@ -81,6 +81,7 @@ typedef	struct	DCC_struct
 	char *		description;
 	char *		filename;
 	char *		user;
+	char *		userhost;
 	char *		othername;
 	char *		encrypt;
 struct	DCC_struct *	next;
@@ -96,6 +97,8 @@ struct	DCC_struct *	next;
 	int		window_max;
 	Timeval		lasttime;
 	Timeval		starttime;
+	Timeval		holdtime;
+	double		heldtime;
 	u_32int_t	packets_total;
 	u_32int_t	packets_transfer;
 	u_32int_t	packets_ack;
@@ -110,6 +113,7 @@ static	long		filesize = 0;
 static	DCC_list *	ClientList = NULL;
 static	char		DCC_current_transfer_buffer[256];
 	time_t		dcc_timeout = 600;		/* Backed by a /set */
+static	int		global_family = AF_INET;
 
 static	void 		dcc_add_deadclient 	(DCC_list *);
 static	void		dcc_chat 		(char *);
@@ -371,7 +375,7 @@ void 	close_all_dcc (void)
 
 /*
  * Place the dcc on hold.  Return 1
- * (fail) if * it was already on hold.
+ * (fail) if it was already on hold.
  */
 int	dcc_hold (DCC_list *dcc)
 {
@@ -379,6 +383,7 @@ int	dcc_hold (DCC_list *dcc)
 	if (dcc->held)
 		return 1;
 	else {
+		get_time(&dcc->holdtime);
 		dcc->held = 1;
 		return 0;
 	}
@@ -390,10 +395,15 @@ int	dcc_hold (DCC_list *dcc)
  */
 int	dcc_unhold (DCC_list *dcc)
 {
+	Timeval now;
+
 	new_unhold_fd(dcc->socket);
 	if (!dcc->held)
 		return 1;
 	else {
+		get_time(&now);
+		dcc->heldtime += time_diff(dcc->holdtime, now);
+		get_time(&dcc->holdtime);
 		dcc->held = 0;
 		return 0;
 	}
@@ -554,7 +564,7 @@ static	DCC_list *dcc_searchlist (
 
 	new_client 			= new_malloc(sizeof(DCC_list));
 	new_client->flags 		= type;
-	new_client->family		= AF_INET;
+	new_client->family		= global_family;	/* AF_INET; */
 	new_client->locked		= 0;
 	new_client->socket 		= -1;
 	new_client->file 		= -1;
@@ -568,12 +578,18 @@ static	DCC_list *dcc_searchlist (
 	new_client->packets_ack 	= 0;
 	new_client->next 		= ClientList;
 	new_client->user 		= m_strdup(user);
+	new_client->userhost 		= (FromUserHost && *FromUserHost)
+					? m_strdup(FromUserHost)
+					: m_strdup(unknown_userhost);
 	new_client->description 	= m_strdup(description);
 	new_client->othername 		= m_strdup(othername);
 	new_client->bytes_read 		= 0;
 	new_client->bytes_sent 		= 0;
 	new_client->starttime.tv_sec 	= 0;
 	new_client->starttime.tv_usec 	= 0;
+	new_client->holdtime.tv_sec 	= 0;
+	new_client->holdtime.tv_usec 	= 0;
+	new_client->heldtime		= 0.0;
 	new_client->window_max 		= 0;
 	new_client->window_sent 	= 0;
 	new_client->want_port 		= 0;
@@ -728,7 +744,8 @@ static	int	dcc_open (DCC_list *dcc)
 			dcc->locked--;
 			dcc->flags |= DCC_DELETE;
 			say("Unable to create connection: (%d) [%d] %s", 
-				dcc->socket, errno, my_strerror(errno));
+				dcc->socket, errno, 
+				my_strerror(dcc->socket, errno));
 			retval = -1;
 			break;
 		}
@@ -757,7 +774,8 @@ static	int	dcc_open (DCC_list *dcc)
 		{
 			dcc->flags |= DCC_DELETE;
 			say("Unable to create connection [%d]: %s", 
-				dcc->socket, my_strerror(errno));
+				dcc->socket, 
+				my_strerror(dcc->socket, errno));
 			retval = -1;
 			break;
 		}
@@ -813,6 +831,10 @@ static void	dcc_send_booster_ctcp (DCC_list *dcc)
 		my_sockaddr = get_server_uh_addr(from_server);
 	else if (family == AF_INET && V4ADDR(dcc->local_sockaddr).s_addr == htonl(INADDR_ANY))
 		my_sockaddr = get_server_local_addr(from_server);
+#ifdef INET6
+	else if (family == AF_INET6 && memcmp(&V6ADDR(dcc->local_sockaddr), &in6addr_any, sizeof(in6addr_any)) == 0)
+		my_sockaddr = get_server_local_addr(from_server);
+#endif
 	else
 		my_sockaddr = dcc->local_sockaddr;
 
@@ -1094,7 +1116,7 @@ void	process_dcc(char *args)
 
 
 /*
- * Usage: /DCC CHAT <nick> [-e passkey]
+ * Usage: /DCC CHAT <nick> [-p port]|[-6]|[-4]
  */
 static void	dcc_chat (char *args)
 {
@@ -1108,16 +1130,29 @@ static void	dcc_chat (char *args)
 		return;
 	}
 
+	/* The default is AF_INET */
+	global_family = AF_INET;
+
 	/*
 	 * Check to see if there is a flag
 	 */
-	if (*args == '-')
+	while (*args == '-')
 	{
 		if (args[1] == 'p')
 		{
 			next_arg(args, &args);
 			if (args && *args)
 			    portnum = my_atol(next_arg(args, &args));
+		}
+		if (args[1] == '6')
+		{
+			next_arg(args, &args);
+			global_family = AF_INET6;
+		}
+		if (args[1] == '4')
+		{
+			next_arg(args, &args);
+			global_family = AF_INET;
 		}
 	}
 
@@ -1180,6 +1215,7 @@ static	void 	dcc_close (char *args)
 	if (any_user)		/* User did specify "-all" user */
 		user = NULL;
 
+	global_family = AF_INET;
 	while ((dcc = dcc_searchlist(file, user, i, 0, file, -1)))
 	{
 		unsigned	my_type = dcc->flags & DCC_TYPES;
@@ -1689,6 +1725,7 @@ static	void	dcc_filesend (char *args)
 		/* XXXXX filesize is a global XXXXX */
 		stat(fullname, &stat_buf);
 		filesize = stat_buf.st_size;
+		global_family = AF_INET;
 		Client = dcc_searchlist(fullname, user, DCC_FILEOFFER, 
 					1, this_arg, -1);
 		filesize = 0;
@@ -1729,6 +1766,7 @@ char	*dcc_raw_listen (int family, unsigned short port)
 		return m_strdup(empty_string);
 	}
 	PortName = LOCAL_COPY(ltoa(port));
+	global_family = AF_INET;
 	Client = dcc_searchlist("raw_listen", PortName, 
 					DCC_RAW_LISTEN, 1, NULL, -1);
 
@@ -1746,7 +1784,7 @@ char	*dcc_raw_listen (int family, unsigned short port)
 	{
 		Client->flags |= DCC_DELETE; 
 		say("Couldnt establish listening socket: [%d] %s", 
-			Client->socket, my_strerror(errno));
+			Client->socket, my_strerror(Client->socket, errno));
 		message_from(NULL, LOG_CURRENT);
 		return m_strdup(empty_string);
 	}
@@ -1780,6 +1818,7 @@ char	*dcc_raw_connect (const char *host, const char *port, int family)
 		return m_strdup(empty_string);
 	}
 
+	global_family = family;
 	Client = dcc_searchlist(host, port, DCC_RAW, 1, NULL, -1);
 	if (Client->flags & DCC_ACTIVE)
 	{
@@ -2246,21 +2285,13 @@ static	void	process_dcc_chat_error (DCC_list *Client)
 static	char *	process_dcc_chat_ctcps (DCC_list *Client, char *tmp)
 {
 	char 	equal_nickname[80];
-	char	p_addr[256];
-	SA *	addr;
-	char 	uh[80];
 	int	ctcp_request = 0, ctcp_reply = 0;
 
 #define CTCP_MESSAGE "CTCP_MESSAGE "
 #define CTCP_REPLY "CTCP_REPLY "
 
 	if (*tmp == CTCP_DELIM_CHAR)
-	{
-#if 0
-		ov_strcpy(tmp, tmp + 1);
-#endif
 		ctcp_request = 1;
-	}
 	else if (!strncmp(tmp, CTCP_MESSAGE, strlen(CTCP_MESSAGE)))
 	{
 		ov_strcpy(tmp, tmp + strlen(CTCP_MESSAGE));
@@ -2274,11 +2305,12 @@ static	char *	process_dcc_chat_ctcps (DCC_list *Client, char *tmp)
 
 	if (ctcp_request == 1 || ctcp_reply == 1)
 	{
-		addr = (SA *)&Client->peer_sockaddr;
-		inet_ntostr(addr, p_addr, 256, NULL, 0, NI_NUMERICHOST);
+		const char *OFUH = FromUserHost;
 
-		snprintf(uh, 80, "Unknown@%s", p_addr);
-		FromUserHost = uh;
+		if (Client->userhost && *Client->userhost)
+			FromUserHost = Client->userhost;
+		else
+			FromUserHost = unknown_userhost;
 		snprintf(equal_nickname, 80, "=%s", Client->user);
 
 		message_from(Client->user, LOG_CTCP);
@@ -2288,7 +2320,7 @@ static	char *	process_dcc_chat_ctcps (DCC_list *Client, char *tmp)
 			tmp = do_notice_ctcp(equal_nickname, nickname, tmp);
 		message_from(NULL, LOG_CURRENT);
 
-		FromUserHost = empty_string;
+		FromUserHost = OFUH;
 	}
 
 	if (!tmp || !*tmp)
@@ -2304,7 +2336,7 @@ static	void	process_dcc_chat_data (DCC_list *Client)
 
 	/* Get a new line via dgets. */
         tmp = alloca(IO_BUFFER_SIZE + 1);
-	bytesread = dgets(tmp, Client->socket, 1, NULL);
+	bytesread = dgets(Client->socket, tmp, IO_BUFFER_SIZE, 1, NULL);
 
 	/* 
 	 * bytesread == 0 means there was new data, but it was an incomplete
@@ -2438,7 +2470,7 @@ static	void		process_incoming_raw (DCC_list *Client)
 	long	bytesread;
 
         bufptr = tmp;
-	switch ((int)(bytesread = dgets(bufptr, Client->socket, 0, NULL)))
+	switch ((int)(bytesread = dgets(Client->socket, bufptr, IO_BUFFER_SIZE, 0, NULL)))
 	{
 	    case -1:
 	    {
@@ -2867,6 +2899,7 @@ static void	DCC_close_filesend (DCC_list *Client, char *info)
 	double 	xtime, xfer;
 
 	xtime = time_diff(Client->starttime, get_time(NULL));
+	xtime -= Client->heldtime;
 	if (Client->bytes_sent)
 		xfer = Client->bytes_sent - Client->resume_size;
 	else
@@ -3103,11 +3136,15 @@ char 	*dccctl 	(char *input)
 			RETURN_STR(client->filename);
 		} else if (!my_strnicmp(listc, "USER", len)) {
 			RETURN_STR(client->user);
+		} else if (!my_strnicmp(listc, "USERHOST", len)) {
+			RETURN_STR(client->userhost);
 		} else if (!my_strnicmp(listc, "OTHERNAME", len)) {
 			RETURN_STR(client->othername);
 		} else if (!my_strnicmp(listc, "ENCRYPT", len)) {
 			RETURN_STR(client->encrypt);
-		} else if (!my_strnicmp(listc, "FILESIZE", len)) {
+		} else if (!my_strnicmp(listc, "SIZE", len)) {
+			RETURN_INT(client->filesize);
+		} else if (!my_strnicmp(listc, "FILESIZE", len)) {  /* DEPRECATED */
 			RETURN_INT(client->filesize);
 		} else if (!my_strnicmp(listc, "RESUMESIZE", len)) {
 			RETURN_INT(client->resume_size);
@@ -3129,20 +3166,24 @@ char 	*dccctl 	(char *input)
 			m_sc3cat_s(&retval, space, ltoa(client->starttime.tv_usec), &clue);
 		} else if (!my_strnicmp(listc, "REMADDR", len)) {
 			char	host[1025], port[25];
-			if (inet_ntostr((SA *)&client->peer_sockaddr,
-						host, sizeof(host),
-						port, sizeof(port), 0))
+			if (!(client->flags & DCC_ACTIVE) ||
+				inet_ntostr((SA *)&client->peer_sockaddr,
+					host, sizeof(host),
+					port, sizeof(port), NI_NUMERICHOST))
 				RETURN_EMPTY;
 			m_sc3cat_s(&retval, space, host, &clue);
 			m_sc3cat_s(&retval, space, port, &clue);
 		} else if (!my_strnicmp(listc, "LOCADDR", len)) {
 			char	host[1025], port[25];
-			if (inet_ntostr((SA *)&client->local_sockaddr,
-						host, sizeof(host),
-						port, sizeof(port), 0))
+			if (!(client->flags & DCC_ACTIVE) ||
+				inet_ntostr((SA *)&client->local_sockaddr,
+					host, sizeof(host),
+					port, sizeof(port), NI_NUMERICHOST))
 				RETURN_EMPTY;
 			m_sc3cat_s(&retval, space, host, &clue);
 			m_sc3cat_s(&retval, space, port, &clue);
+		} else {
+			RETURN_EMPTY;
 		}
 	} else if (!my_strnicmp(listc, "SET", len)) {
 		GET_INT_ARG(ref, input);
@@ -3162,6 +3203,18 @@ char 	*dccctl 	(char *input)
 			client->refnum = newref;
 
 			RETURN_INT(1);
+		} else if (!my_strnicmp(listc, "DESCRIPTION", len)) {
+			malloc_strcpy(&client->description, input);
+		} else if (!my_strnicmp(listc, "FILENAME", len)) {
+			malloc_strcpy(&client->filename, input);
+		} else if (!my_strnicmp(listc, "USER", len)) {
+			malloc_strcpy(&client->user, input);
+		} else if (!my_strnicmp(listc, "USERHOST", len)) {
+			malloc_strcpy(&client->userhost, input);
+		} else if (!my_strnicmp(listc, "OTHERNAME", len)) {
+			malloc_strcpy(&client->othername, input);
+		} else if (!my_strnicmp(listc, "ENCRYPT", len)) {
+			malloc_strcpy(&client->encrypt, input);
 		} else if (!my_strnicmp(listc, "HELD", len)) {
 			long	hold, held;
 
@@ -3172,7 +3225,10 @@ char 	*dccctl 	(char *input)
 				held = dcc_unhold(client);
 
 			RETURN_INT(held);
+		} else {
+			RETURN_EMPTY;
 		}
+		RETURN_INT(1);
 	} else if (!my_strnicmp(listc, "TYPEMATCH", len)) {
 		for (client = ClientList; client; client = client->next)
 			if (wild_match(input, dcc_types[client->flags & DCC_TYPES]))
@@ -3189,6 +3245,10 @@ char 	*dccctl 	(char *input)
 		for (client = ClientList; client; client = client->next)
 			if (wild_match(input, client->user ? client->user : EMPTY))
 				m_sc3cat_s(&retval, space, ltoa(client->refnum), &clue);
+	} else if (!my_strnicmp(listc, "USERHOSTMATCH", len)) {
+		for (client = ClientList; client; client = client->next)
+			if (wild_match(input, client->userhost ? client->userhost : EMPTY))
+				m_sc3cat_s(&retval, space, ltoa(client->refnum), &clue);
 	} else if (!my_strnicmp(listc, "OTHERMATCH", len)) {
 		for (client = ClientList; client; client = client->next)
 			if (wild_match(input, client->othername ? client->othername : EMPTY))
@@ -3196,6 +3256,14 @@ char 	*dccctl 	(char *input)
 	} else if (!my_strnicmp(listc, "LOCKED", len)) {
 		for (client = ClientList; client; client = client->next)
 			if (client->locked)
+				m_sc3cat_s(&retval, space, ltoa(client->refnum), &clue);
+	} else if (!my_strnicmp(listc, "HELD", len)) {
+		for (client = ClientList; client; client = client->next)
+			if (client->held)
+				m_sc3cat_s(&retval, space, ltoa(client->refnum), &clue);
+	} else if (!my_strnicmp(listc, "UNHELD", len)) {
+		for (client = ClientList; client; client = client->next)
+			if (!client->held)
 				m_sc3cat_s(&retval, space, ltoa(client->refnum), &clue);
 	} else
 		RETURN_EMPTY;

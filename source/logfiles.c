@@ -1,4 +1,4 @@
-/* $EPIC: logfiles.c,v 1.9.2.1 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: logfiles.c,v 1.9.2.2 2003/03/24 17:53:01 wd Exp $ */
 /*
  * logfiles.c - General purpose log files
  *
@@ -356,7 +356,7 @@ static Logfile *	logfile_kill (Logfile *log, char **args)
 {
 	if (!log)
 	{
-		say("LEVEL: You need to specify a logfile first");
+		say("KILL: You need to specify a logfile first");
 		return NULL;
 	}
 

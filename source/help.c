@@ -1,4 +1,4 @@
-/* $EPIC: help.c,v 1.2.2.1 2003/02/27 15:29:56 wd Exp $ */
+/* $EPIC: help.c,v 1.2.2.2 2003/03/24 17:53:01 wd Exp $ */
 /*
  * help.c: handles the help stuff for irc 
  *
@@ -48,7 +48,7 @@
  */
 
 #if 0
-static char rcsid[] = "@(#)$Id: help.c,v 1.2.2.1 2003/02/27 15:29:56 wd Exp $";
+static char rcsid[] = "@(#)$Id: help.c,v 1.2.2.2 2003/03/24 17:53:01 wd Exp $";
 #endif
 
 #include "irc.h"

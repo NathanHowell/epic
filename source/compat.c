@@ -1,4 +1,4 @@
-/* $EPIC: compat.c,v 1.13.2.1 2003/02/27 15:29:55 wd Exp $ */
+/* $EPIC: compat.c,v 1.13.2.2 2003/03/24 17:53:00 wd Exp $ */
 /*
  * Everything that im not directly responsible for I put in here.  Almost
  * all of this stuff is either borrowed from somewhere else (for you poor
