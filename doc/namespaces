@@ -1,0 +1,88 @@
+-------------------------------------------------------------------------------
+$Id: namespaces,v 1.1.2.1 2003/02/25 00:18:39 wd Exp $
+-------------------------------------------------------------------------------
+[Table of Contents]:
+...1: Introduction to the concept
+...2: Implementation
+...3: Progress
+-------------------------------------------------------------------------------
+[1: Introduction to the concept]:
+
+Namespaces are a system of organising disparate modules of code.  They are a
+way of preventing 'name collisions' among functions and variable names.
+This can be argued to be extremely important, or not, but it cannot be
+argued that the organisational benefits are important.  Especially in a
+program like EPIC where the user is likely to introduce multiple script
+packs from multiple, non-cooperating vendors (perhaps the vendors don't even
+know about others).  In such a case it is beneficial to each vendor to have
+a method by which to organise their code, and protect it from tampering by
+the outside world.
+
+Namespaces significantly reduce the likelihood of function and variable
+collision, and also significantly improve the ease with which collisions can
+be fixed.  Typically, only one line of code in a vendor package will need to
+be changed, and that line is usually easier to find than hunting down
+colliding functions (or worse, variables!).
+
+-------------------------------------------------------------------------------
+[2: Implementation]:
+
+EPIC supports a tree-system for namespaces.  This means that each namespace
+can have branches, sub-namespaces if you will.  These are their own separate
+space, but also belong to the main namespace.  This means that, for example,
+if a script pack contains sub-modules they can be neatly organised, but also
+cleanly removed by simply removing the root namespace.
+
+In EPIC, namespaces are delimited by the '::' marker.  The root namespace
+has a zero-length name, and is identified by a '::' symbol with no prefix or
+suffix.  For example, to add a function (alias) to the global namespace
+explicitly, you would do:
+alias ::function ...
+
+To specify a new, non-root namespace, the 'namespace' command is used.
+Multiple commands can be nested to generate a namespace tree, as in the
+following example:
+
+namespace foo
+alias afoo ...
+namespace bar
+alias abar ...
+namespace ::baz
+alias abaz ...
+
+Which will generate three aliases: foo::afoo, foo:bar::abar, and baz::abaz
+
+Branches in the namespace tree are separated by the same '::' marker, so a
+brach 'bar' in the 'foo' namespace in the top-level (root) namespace are
+expressed as 'foo::bar' (or '::foo::bar', but the initial :: is usually
+implied).
+
+In cases where the code is executing inside a namespace (for example, in a
+function in a namespace) namespaces which are specified are considered to be
+*inside the current namespace*.  So, for example:
+
+namespace foo
+alias afoo {
+  echo $bar::baz
+}
+namespace
+
+/afoo
+
+Would try to output the value from '$foo::bar::baz', not '$bar::baz'.
+
+-------------------------------------------------------------------------------
+[3: Progress]:
+
+The following objectives need to be completed.  Those marked with a * are
+finished:
+
+- Move aliases/assigns from alists to hash tables.  Store these hashtables
+  within namespace structures.
+- Add namespace commands to select the current namespace
+- Add export command to export symbols to the root table
+- Remove the 'package' command, or modify it to produce a warning
+- Modify the unload command to handle removing namespace trees
+- Possibly add namespace tagging to binding functions, keybindings, timers,
+  sets, and hooks.
+
