@@ -1,5 +1,5 @@
 -------------------------------------------------------------------------------
-$Id: namespaces,v 1.1.2.1 2003/02/25 00:18:39 wd Exp $
+$Id: namespaces,v 1.1.2.2 2003/03/25 13:16:52 wd Exp $
 -------------------------------------------------------------------------------
 [Table of Contents]:
 ...1: Introduction to the concept
@@ -77,9 +77,9 @@ Would try to output the value from '$foo::bar::baz', not '$bar::baz'.
 The following objectives need to be completed.  Those marked with a * are
 finished:
 
-- Move aliases/assigns from alists to hash tables.  Store these hashtables
+* Move aliases/assigns from alists to hash tables.  Store these hashtables
   within namespace structures.
-- Add namespace commands to select the current namespace
+* Add namespace commands to select the current namespace
 - Add export command to export symbols to the root table
 - Remove the 'package' command, or modify it to produce a warning
 - Modify the unload command to handle removing namespace trees

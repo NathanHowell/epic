@@ -1,4 +1,4 @@
-/* $EPIC: namespace.c,v 1.1.2.4 2003/03/24 17:53:01 wd Exp $ */
+/* $EPIC: namespace.c,v 1.1.2.5 2003/03/25 13:16:53 wd Exp $ */
 /*
  * namespace.c: Namespace tracking system.
  *
@@ -38,6 +38,7 @@
 #include "namespace.h"
 
 struct namespace_list namespaces;
+static int namespace_valid_name(char *);
 static namespace_t *namespace_find_in(char *, namespace_t *);
 
 /* This function fills in the 'namespaces' global.  It sets up the root
@@ -46,6 +47,28 @@ void namespace_init(void) {
 
     namespaces.root = namespace_create("");
     namespaces.current = namespaces.root;
+}
+
+/*
+ * This function checks 'name' to see if it contains valid characters for
+ * namespace names.  It is assumed that 'name' is a pre-separated component
+ * (i.e. there are no :: separators).  Valid characters are:
+ * a-zA-Z_ for the first character and a-zA-Z0-9_ for subsequent characters.
+ */
+static int namespace_valid_name(char *name) {
+    char *s = name + 1;
+
+    if (('a' > tolower(*name) || 'z' < tolower(*name)) && *name != '_')
+	return 0; /* bogus first char */
+
+    while (*s != '\0') {
+	if ((('a' > tolower(*s) || 'z' < tolower(*s)) &&
+		    ('0' > *s || '9' < *s)) && *s != '_')
+	    return 0;
+	s++;
+    }
+
+    return 1; /* s'alright. */
 }
 
 /* This function creates a new namespace.  It links it, by default, to the
@@ -82,10 +105,12 @@ namespace_t *namespace_find(char *name) {
 	nsp = namespaces.root;
 	name += 2;
     }
+    if (*name == '\0')
+	return namespaces.root;
 
     while (name != '\0') {
 	if ((s = strchr(name, ':')) != NULL) {
-	    if (!strncmp(s, "::", 2)) {
+	    if (strncmp(s, "::", 2)) {
 		yell("malformed namespace component: %s", name);
 		return NULL; /* this is bogus! */
 	    }
@@ -102,7 +127,7 @@ namespace_t *namespace_find(char *name) {
 	    return NULL;
 	}
 
-	*s = ':'; /* fix this, and continue with name being set after the :: */
+	*s = ':'; /* fix this and continue on */
 	name = s + 2;
     }
 
@@ -132,10 +157,18 @@ void namespace_destroy(namespace_t *space) {
 	namespace_destroy(nsp);
 
     /* XXX: Alias cleanup! */
-    destroy_hash_table(nsp->ftable);
-    destroy_hash_table(nsp->vtable);
+    destroy_hash_table(space->ftable);
+    destroy_hash_table(space->vtable);
 
-    new_free(&nsp);
+    /* Make sure the current namespace remains valid! */
+    if (namespaces.current == space && space != namespaces.root)
+	namespaces.current = space->parent;
+
+    /* Make sure not to free the root namespace. :) */
+    if (space != namespaces.root) {
+	LIST_REMOVE(space, lp);
+	new_free(&space);
+    }
 }
 
 /* This gets the full name of the namespace.  If explicit is non-zero, the
@@ -147,17 +180,115 @@ char *namespace_get_full_name(namespace_t *space, int explicit) {
     char *tmp;
 
     while ((nsp = nsp->parent) != NULL) {
+	/* Don't prepend the root name if they don't want it. */
+	if (nsp == namespaces.root && !explicit)
+	    return buf;
 	/* now *prepend* this one's name onto the current space.. */
 	tmp = buf;
 	buf = m_3dup(nsp->name, "::", tmp);
 	new_free(&tmp);
     }
-    if (explicit) {
-	tmp = buf;
-	buf = m_2dup("::", tmp);
-	new_free(&tmp);
+    if (*buf == '\0' && explicit) {
+	new_free(&buf);
+	buf = m_strdup("::");
     }
 
     return buf;
 }
 
+/*
+ * The namespace command.  This controls the current notion of the namespace
+ * we are in.  No restrictions are placed on where it can be used (meaning
+ * it can be used from the input line so watch out ;).  Syntax is as
+ * follows:
+ * NAMESPACE [space] [verb]
+ * If no arguments are given, a tree listing of the current namespaces is
+ * provided.  If one argument is given the current namespace is changed to
+ * that space.  If two arguments are given then the specified action is
+ * taken on the specified namespace.  Currently there are two verbs
+ * available: UNLOAD and INFO.  UNLOAD causes the namespace (and its
+ * children!) to be obliterated.  INFO shows information on the namespace
+ * and its children.
+ *
+ * It is important to note that, when setting the current namespace, if you
+ * are creating a new namespace you cannot recursively create new spaces in
+ * a single command.  i.e. "namespace foo::bar::baz" is not valid if either
+ * of foo or foo::bar do not exist.
+ */
+static void show_namespace_tree(namespace_t *);
+BUILT_IN_COMMAND(namespace_command) {
+    char *space, *verb;
+    namespace_t *nsp;
+
+    if ((space = new_next_arg(args, &args)) == NULL) {
+	show_namespace_tree(namespaces.root);
+	return;
+    }
+
+    if ((verb = new_next_arg(args, &args)) == NULL) {
+	if ((nsp = namespace_find(space)) == NULL) {
+	    /* namespace doesn't exist.. create it for them.  We check to
+	     * see if this is a multi-component name.  If it is, and the
+	     * parts prior to the last represent a valid space, we switch
+	     * over to that space and create in it. */
+	    if ((verb = strrchr(space, ':')) != NULL) {
+		if (verb == space || *--verb != ':') {
+		    yell("Malformed namespace name %s", space);
+		    return;
+		} else
+		    *verb = '\0';
+		if ((nsp = namespace_find(space)) == NULL) {
+		    yell("Cannot recursively create namespaces");
+		    return;
+		}
+		namespaces.current = nsp;
+		space = verb + 2;
+	    }
+	    if (!namespace_valid_name(space)) {
+		yell("Invalid namespace name %s", space);
+		return;
+	    }
+	    nsp = namespace_create(space);
+	    say("Created namespace %s",
+		    (space = namespace_get_full_name(nsp, 0)));
+	} else
+	    say("Switched to namespace %s",
+		    (space = namespace_get_full_name(nsp, 0)));
+
+	/* nsp is valid now.. */
+	namespaces.current = nsp;
+	new_free(&space);
+
+	return;
+    }
+
+    /* Okay, we have a space and a verb.  Go through the motions */
+    if ((nsp = namespace_find(space)) == NULL) {
+	yell("No such namespace %s", space);
+	return;
+    }
+
+    if (!strncasecmp(verb, "INFO", 1))
+	show_namespace_tree(nsp);
+    else if (!strncasecmp(verb, "UNLOAD", 1)) {
+	say("Unloading namespace %s and its children",
+		(space = namespace_get_full_name(nsp, 0)));
+	namespace_destroy(nsp);
+	new_free(&space);
+    }
+}
+
+static void show_namespace_tree(namespace_t *space) {
+    namespace_t *nsp;
+    char *s;
+
+    s = namespace_get_full_name(space, 1);
+    say("%s%s %d functions, %d aliases", s,
+	    (space == namespaces.current ? "*" : ""),
+	    hashtable_count(space->ftable), hashtable_count(space->vtable));
+
+    LIST_FOREACH(nsp, &space->children, lp)
+	show_namespace_tree(nsp);
+
+    new_free(&s);
+}

@@ -38,6 +38,7 @@ namespace_t *namespace_create(char *);
 namespace_t *namespace_find(char *);
 void namespace_destroy(namespace_t *);
 char *namespace_get_full_name(namespace_t *, int);
+BUILT_IN_COMMAND(namespace_command);
 
 /* This is the 'sanity' length for hashing functions/variables.  While
  * longer names will remain 'unique' in the system, the names will only be

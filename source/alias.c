@@ -1,4 +1,4 @@
-/* $EPIC: alias.c,v 1.11.2.8 2003/03/25 09:20:33 wd Exp $ */
+/* $EPIC: alias.c,v 1.11.2.9 2003/03/25 13:16:53 wd Exp $ */
 /*
  * alias.c -- Handles the whole kit and caboodle for aliases.
  *
@@ -859,7 +859,7 @@ static namespace_t *extract_namespace(char **name) {
     namespace_t *nsp;
 
     if ((s = strrchr(*name, ':')) == NULL)
-	return namespaces.root; /* a global object in the root space */
+	return namespaces.current; /* a global object in the current space */
 
     /* Otherwise, we need to set 'name' correctly, then decide if we have a
      * namespace or just a 'local' specifier. */
@@ -1023,22 +1023,6 @@ void	add_local_var	(char *name, char *stuff, int noisy)
 	 * where it will be reaped later.
 	 */
 	if ((tmp = find_local_var(name, &rtsp)) == NULL) {
-		tmp = LIST_FIRST(rtsp->vlist);
-		if (tmp != NULL && tmp->lp.le_prev != rtsp->vlist) {
-		    int c;
-		    yell("List breakage before adding..");
-		    for (c = wind_index;c >= 0;c--) {
-			if (&call_stack[c] == rtsp)
-			    continue;
-			if (tmp->lp.le_prev == call_stack[c].vlist) {
-			    yell("call_stack[%d] has the list.");
-			    break;
-			}
-		    }
-		    if (c < 0)
-			yell("can't find the list.. hrm.");
-		}
-
 		tmp = make_new_Alias(name);
 		hash_insert(rtsp->vtable, tmp);
 		LIST_INSERT_HEAD(rtsp->vlist, tmp, lp);

@@ -1,4 +1,4 @@
-/* $EPIC: commands.c,v 1.44.2.3 2003/03/24 17:53:00 wd Exp $ */
+/* $EPIC: commands.c,v 1.44.2.4 2003/03/25 13:16:53 wd Exp $ */
 /*
  * commands.c -- Stuff needed to execute commands in ircII.
  *		 Includes the bulk of the built in commands for ircII.
@@ -62,6 +62,7 @@
 #include "lastlog.h"
 #include "log.h"
 #include "names.h"
+#include "namespace.h"
 #include "notify.h"
 #include "notice.h"
 #include "numbers.h"
@@ -282,6 +283,7 @@ static	IrcCommand irc_command[] =
 	{ "MOTD",	"MOTD",		send_comm,		0 },
 	{ "MSG",	"PRIVMSG",	e_privmsg,		0 },
 	{ "NAMES",	"NAMES",	funny_stuff,		0 },
+	{ "NAMESPACE",	NULL,		namespace_command,	0 }, /* namespace.c */
 	{ "NICK",	"NICK",		e_nick,			0 },
 	{ "NOTE",	"NOTE",		send_comm,		0 },
 	{ "NOTICE",	"NOTICE",	e_privmsg,		0 },
