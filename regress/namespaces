@@ -1,0 +1,44 @@
+# script to test that namespaces are doing what they're supposed to.
+# assumes a clean epic (no other scripts loaded)
+
+# XXX: This script is broken already. ;)  I need to decide if aliases should
+# be allowed to execute in the current namespace instead of forcing a scope
+# change via some flag or other.  Why?  Because assert() here will fail in a
+# non-root namespace because when it is called it leaves the namespace it
+# was in for its own, so "assert foo() == [anything but root]" will always
+# fail.
+
+alias assert {
+    eval @:foo = $*
+    if (!foo) {
+	echo assertion $* failed!
+    }
+}
+
+alias foo {return $foo}
+alias bar {
+    assert foo() == [root]
+    assert foo::foo() == [foo]
+    foo::bar
+    assert foo::bar::foo() == [foo::bar]
+    foo::bar::bar
+}
+assign foo root
+
+namespace foo
+alias foo {return $foo}
+alias bar {
+    assert foo() == [foo]
+    assert bar::foo() == [foo::bar]
+    bar::bar
+}
+assign foo foo
+
+namespace bar
+alias foo {return $foo}
+alias bar {
+    assert foo() == [foo::bar]
+}
+assign foo foo::bar
+
+namespace ::

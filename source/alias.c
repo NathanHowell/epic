@@ -1,4 +1,4 @@
-/* $EPIC: alias.c,v 1.11.2.11 2003/03/26 12:38:50 wd Exp $ */
+/* $EPIC: alias.c,v 1.11.2.12 2003/03/26 13:30:39 wd Exp $ */
 /*
  * alias.c -- Handles the whole kit and caboodle for aliases.
  *
@@ -73,24 +73,16 @@ static 	char *lval[] = { "rvalue", "lvalue" };
 static  char *after_expando (char *start, int lvalue, int *call)
 {
 	char	*rest;
-	char	*str;
+	char	*str = start;
 
 	if (!*start)
 		return start;
 
 	/*
-	 * One or two leading colons are allowed
-	 */
-	str = start;
-	if (*str == ':')
-		if (*++str == ':')
-			++str;
-
-	/*
 	 * This handles 99.99% of the cases
 	 */
 	while (*str && (isalpha(*str) || isdigit(*str) || 
-				*str == '_' || *str == '.'))
+				*str == '_' || *str == '.' || *str == ':'))
 		str++;
 
 	/*
@@ -1060,7 +1052,10 @@ void	add_cmd_alias	(char *name, ArgList *arglist, char *stuff, int stub)
 
 	if ((nsp = extract_namespace(&name)) == LOCAL_NAMESPACE) {
 		/* XXX: Self-serving hack.  I use aliases which begin with
-		 * ':'.  I can make them work without too much trouble. :) */
+		 * ':'.  I can make them work without too much trouble. :).
+		 * Note, however, that ':' really isn't a valid character in
+		 * an alias, and trying to use aliases with ':' in a
+		 * non-root namespace will just get you in to trouble. */ 
 		name = save;
 		nsp = namespaces.root;
 	} else if (nsp == NULL) {
@@ -1106,7 +1101,7 @@ static	int	unstub_in_progress = 0;
 
 
 /* 'name' is expected to already be in canonical form (uppercase, dot
- * noation), local is true if local lookups should be performed, and false
+ * notation), local is true if local lookups should be performed, and false
  * (0) otherwise. */
 static Alias *	find_variable (char *name, int local) {
 	Alias *	item = NULL;
@@ -1127,8 +1122,13 @@ static Alias *	find_variable (char *name, int local) {
 		(item = find_local_var(name, NULL)) != NULL)
 	    return item;
 
-	/* no luck?  try the regular method */
+	/* now search in the namespace we were given.  if we still can't
+	 * find it, and nsp is not the root namespace and 'name' was not
+	 * qualified then look in the root space too. */
 	if ((item = hash_find(nsp->vtable, name)) == NULL)
+	    if (name == save && nsp != namespaces.root)
+		item = hash_find(namespaces.root->vtable, name);
+	if (item == NULL)
 	    return NULL; /* no luck */
 
 	/* otherwise, we have to see if it is stubbed.  if it is, we need to
@@ -1165,7 +1165,12 @@ Alias *find_cmd_alias (char *name) {
     } else if (nsp == NULL)
 	return NULL;
 
+    /* this is like find_variable.  we look in the current space, and if
+     * name is unqualified, in the root space if that is unsuccesful. */
     if ((item = hash_find(nsp->ftable, name)) == NULL)
+	if (name == save && nsp != namespaces.root)
+	    item = hash_find(namespaces.root->ftable, name);
+    if (item == NULL)
 	return NULL; /* no luck */
 
     /* otherwise, we have to see if it is stubbed.  if it is, we need to
@@ -1824,6 +1829,7 @@ char 	*call_user_function	(char *alias_name, char *args)
 
 	result = get_variable("FUNCTION_RETURN");
 	last_function_call_level = old_last_function_call_level;
+	namespaces.current = old_ns;
 	destroy_local_stack();
 
 	return (result == NULL ? m_strdup(empty_string) : result);
