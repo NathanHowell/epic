@@ -1,4 +1,4 @@
-/* $EPIC: namespace.c,v 1.1.2.6 2003/03/26 09:20:46 wd Exp $ */
+/* $EPIC: namespace.c,v 1.1.2.7 2003/03/26 12:38:50 wd Exp $ */
 /*
  * namespace.c: Namespace tracking system.
  *
@@ -39,7 +39,9 @@
 
 struct namespace_list namespaces;
 static int namespace_valid_name(char *);
+static namespace_t *namespace_create(char *);
 static namespace_t *namespace_find_in(char *, namespace_t *);
+static void namespace_destroy(namespace_t *);
 
 /* This function fills in the 'namespaces' global.  It sets up the root
  * namespace and... well.. that's it. */
@@ -47,6 +49,18 @@ void namespace_init(void) {
 
     namespaces.root = namespace_create("");
     namespaces.current = namespaces.root;
+}
+
+/*
+ * This function performs 'cleanup' for namespaces deferred for destruction.
+ * In other words, at the appropriate time, we destroy the namespaces
+ * scheduled for destruction.  This should probably only occur in one place
+ * (parse_line).
+ */
+void namespace_cleanup(void) {
+    
+    while (!LIST_EMPTY(&namespaces.deferred))
+	namespace_destroy(LIST_FIRST(&namespaces.deferred));
 }
 
 /*
@@ -75,7 +89,7 @@ static int namespace_valid_name(char *name) {
  * current namespace.  If the current namespace is NULL (this should only
  * ever happen once) then it is not linked anywhere.  It also sets up the
  * necessary tables, and so on. */
-namespace_t *namespace_create(char *name) {
+static namespace_t *namespace_create(char *name) {
     namespace_t *nsp = new_malloc(sizeof(namespace_t));
 
     memset(nsp, 0, sizeof(namespace_t));
@@ -150,7 +164,7 @@ static namespace_t *namespace_find_in(char *name, namespace_t *space) {
 }
 
 /* This function destroys a namespace, and all of its branches. */
-void namespace_destroy(namespace_t *space) {
+static void namespace_destroy(namespace_t *space) {
     namespace_t *nsp;
 
     while ((nsp = LIST_FIRST(&space->children)) != NULL)
@@ -273,7 +287,9 @@ BUILT_IN_COMMAND(namespace_command) {
     else if (!strncasecmp(verb, "UNLOAD", 1)) {
 	say("Unloading namespace %s and its children",
 		(space = namespace_get_full_name(nsp, 0)));
-	namespace_destroy(nsp);
+	/* Hrm, let's just defer this instead.. */
+	LIST_REMOVE(nsp, lp);
+	LIST_INSERT_HEAD(&namespaces.deferred, nsp, lp);
 	new_free(&space);
     }
 }

@@ -1,4 +1,4 @@
-/* $EPIC: expr2.c,v 1.4.2.3 2003/03/26 09:20:46 wd Exp $ */
+/* $EPIC: expr2.c,v 1.4.2.4 2003/03/26 12:38:50 wd Exp $ */
 /*
  * Zsh: math.c,v 3.1.2.1 1997/06/01 06:13:15 hzoli Exp 
  * math.c - mathematical expression evaluation
@@ -1934,7 +1934,7 @@ static int	zzlex (expr_info *c)
 				char *result;
 
 				result = parse_line_with_return(NULL, p, 
-							(char *)c->args, 0);
+							(char *)c->args);
 				c->last_token = tokenize_expanded(c, result);
 				new_free(&result);
 			}

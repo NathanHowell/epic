@@ -31,12 +31,14 @@ typedef struct namespace {
 extern struct namespace_list {
     namespace_t *current;
     namespace_t *root;
+
+    LIST_HEAD(, namespace) deferred;		/* list of to-be-killed
+						   spaces */
 } namespaces;
 
 void namespace_init(void);
-namespace_t *namespace_create(char *);
+void namespace_cleanup(void);
 namespace_t *namespace_find(char *);
-void namespace_destroy(namespace_t *);
 char *namespace_get_full_name(namespace_t *, int);
 BUILT_IN_COMMAND(namespace_command);
 

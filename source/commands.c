@@ -1,4 +1,4 @@
-/* $EPIC: commands.c,v 1.44.2.6 2003/03/26 09:53:28 wd Exp $ */
+/* $EPIC: commands.c,v 1.44.2.7 2003/03/26 12:38:50 wd Exp $ */
 /*
  * commands.c -- Stuff needed to execute commands in ircII.
  *		 Includes the bulk of the built in commands for ircII.
@@ -3344,9 +3344,9 @@ static int eat_cmd_chars(const char **line, int *noisy) {
  * Im sure that i did a hideously bletcherous job that needs to be cleaned up.
  * So just be forewarned about the damage.
  */
+static unsigned int parse_level = 0;
 void	parse_line (const char *name, const char *org_line, const char *args,
-	int append_flag)
-{
+	int append_flag) {
 	char	*line = NULL,
 		*stuff,
 		*s,
@@ -3357,7 +3357,7 @@ void	parse_line (const char *name, const char *org_line, const char *args,
 	if (org_line == NULL)
 		panic("org_line is NULL and it shouldn't be.");
 	else if (*org_line == '\0') {
-	    yell("parse_line got blank line.  hrm.");
+	    yell("parse_line got a blank line.  hrm.");
 	    return; /* this shouldn't happen any more.. */
 	}
 
@@ -3367,6 +3367,7 @@ void	parse_line (const char *name, const char *org_line, const char *args,
 	 */
 	if (name)
 		make_local_stack(name);
+	parse_level++;
 
 	/*
 	 * We will be mangling 'org_line', so we make a copy to work with.
@@ -3377,7 +3378,6 @@ void	parse_line (const char *name, const char *org_line, const char *args,
 	 * Otherwise, if the command has arguments, then:
 	 *	* It is being run as part of an alias/on/function
 	 *	* It is being /LOADed while /set input_aliases ON
-	 *	* It is typed at the input prompt while /set input_aliases ON
 	 */
 	if (args != NULL) {
 	    do 
@@ -3397,12 +3397,10 @@ void	parse_line (const char *name, const char *org_line, const char *args,
 		 */
                 while (*line == '{') 
                 {
-		    if (!(stuff = next_expr(&line, '{'))) 
-		    {
+		    if (!(stuff = next_expr(&line, '{'))) {
 			error("Unmatched {"); 
-			if (name)
-				destroy_local_stack();
-			return;
+			die = 1;
+			break;
 		    }
 
 		    /* I'm fairly sure the first arg ought not be 'name' */
@@ -3494,29 +3492,21 @@ void	parse_line (const char *name, const char *org_line, const char *args,
 		/*
 		 * We repeat this as long as we have more commands to parse.
 		 */
-	    }
-	    while (line && *line);
-	}
-
-	/*
-	 * Otherwise, If it is being /LOADed, just parse it directly.
-	 */
-        else if (load_depth != -1)
-		parse_command(line, args);
-
-	/* this shouldn't happen any more.. */
+	    } while (line && *line);
+	} else if (load_depth != -1)
+	    /* Otherwise, If it is being /LOADed, just parse it directly.  */
+	    parse_command(line, args);
 	else
+	    /* this shouldn't happen any more.. */
 	    yell("parse_line called without args outsied of load");
 
-	/*
-	 * If we're an atomic scope, blow away our local variable stack.
-	 */
+	/* now cleanup.. */
+	parse_level--;
 	if (name)
 		destroy_local_stack();
 
 	return;
 }
-
 
 /*
  * parse_command: parses a line of input from the user.  If the first
@@ -3541,7 +3531,6 @@ void	parse_line (const char *name, const char *org_line, const char *args,
  */
 int	parse_command (const char *line, const char *sub_args)
 {
-static	unsigned 	level = 0;
 	unsigned 	display;
 	int		old_display_var;
 	const char *	com;
@@ -3554,8 +3543,7 @@ static	unsigned 	level = 0;
 		return 0;
 
 	if (get_int_var(DEBUG_VAR) & DEBUG_COMMANDS)
-		yell("Executing [%d] %s", level, line);
-	level++;
+		yell("Executing [%d] %s", parse_level, line);
 
 	this_cmd = LOCAL_COPY(line);
 	set_current_command(this_cmd);
@@ -3593,10 +3581,10 @@ static	unsigned 	level = 0;
 		if ((tmp = parse_inline(my_line + 1, sub_args, &args_flag)))
 			new_free(&tmp);
 	} else {
-		char		*rest,
-				*alias = NULL;
+		char		*rest;
 		char		*cline;
 		int		cmd_cnt;
+		Alias		*alias;
 		IrcCommand	*command;
 		void		*arglist = NULL;
 
@@ -3614,15 +3602,13 @@ static	unsigned 	level = 0;
 
 		upper(cline);
 
-		if (cmdchar_used < 2)
-		    alias = get_cmd_alias(cline, &arglist);
-
-		if (alias != NULL) {
-		    call_user_alias(cline, alias, rest, arglist);
-		} else if (*cline == '!') {
+		if (cmdchar_used < 2 &&
+			(alias = find_cmd_alias(cline)) != NULL)
+		    call_user_alias(alias, rest);
+		else if (*cline == '!') {
 		    /* History */
 		    if ((cline = do_history(cline + 1, rest)) != NULL) {
-			if (level == 1)
+			if (parse_level == 0) /* direct from command line */
 			    set_input(cline);
 			else
 			    parse_command(cline, sub_args);
@@ -3665,7 +3651,6 @@ static	unsigned 	level = 0;
 	else
 		window_display = display;
 
-	level--;
 	unset_current_command();
         return 0;
 }

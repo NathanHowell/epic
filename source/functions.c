@@ -1,4 +1,4 @@
-/* $EPIC: functions.c,v 1.90.2.3 2003/03/24 17:53:00 wd Exp $ */
+/* $EPIC: functions.c,v 1.90.2.4 2003/03/26 12:38:50 wd Exp $ */
 /*
  * functions.c -- Built-in functions for ircII
  *
@@ -790,16 +790,13 @@ char	*call_function (char *name, const char *args, int *args_flag)
 	else
 		result = call_user_function(name, tmp);
 
-	if (debugging)
+	if (debugging & DEBUG_FUNCTIONS)
 	{
 		char *	buf;
 		buf = (char *)alloca(strlen(name) + strlen(debug_copy) + 15);
 		sprintf(buf, "$%s(%s)", name, debug_copy);
 		MUST_BE_MALLOCED(result, buf);
-
-		if (debugging & DEBUG_FUNCTIONS)
-			yell("Function %s(%s) returned %s", 
-				name, debug_copy, result);
+		yell("Function %s(%s) returned %s", name, debug_copy, result);
 	}
 
 	new_free(&tmp);

@@ -50,7 +50,7 @@ LIST_HEAD(alias_list, AliasItemStru);
 
 	char *	get_variable		(char *name);
 	char **	glob_cmd_alias		(char *name, int *howmany);
-	char *	get_cmd_alias		(char *name, void **args);
+	Alias *	find_cmd_alias		(char *name);
 	char *	complete_cmd_alias	(const char *name, int *howmany);
 	char **	get_subarray_elements 	(char *root, int *howmany, int type);
 
@@ -81,7 +81,7 @@ LIST_HEAD(alias_list, AliasItemStru);
  * Noone should be calling this directly except for call_function.
  */
 	char *	call_user_function 	(char *, char *);
-	void	call_user_alias		(char *, char *, char *, void *);
+	void	call_user_alias		(Alias *, char *);
 
 
 /*
@@ -101,18 +101,6 @@ LIST_HEAD(alias_list, AliasItemStru);
  */
 	char *	built_in_alias		(char, int *);
 
-
-
-/* BOGUS */
-
-/*
- * This function is used to prepare the $* string before calling a user
- * alias or function.  You should pass in the last argument from get_cmd_alias
- * to this function, and also the $* value.  The second value may very well
- * be modified.
- */
-	void	prepare_alias_call	(void *, char **);
-	void	destroy_alias_call	(void *);
 
 /*
  * This is in functions.c
@@ -145,7 +133,7 @@ LIST_HEAD(alias_list, AliasItemStru);
 /*
  * Truly bogus. =)
  */
-	char	*parse_line_with_return (char *, char *, char *, int);
+	char	*parse_line_with_return (char *, char *, char *);
 	char 	*canon_number (char *input);
 
 #endif /* _ALIAS_H_ */

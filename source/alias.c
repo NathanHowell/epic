@@ -1,4 +1,4 @@
-/* $EPIC: alias.c,v 1.11.2.10 2003/03/26 09:20:45 wd Exp $ */
+/* $EPIC: alias.c,v 1.11.2.11 2003/03/26 12:38:50 wd Exp $ */
 /*
  * alias.c -- Handles the whole kit and caboodle for aliases.
  *
@@ -206,7 +206,6 @@ void	destroy_arglist (ArgList *);
  */
 static  void    add_cmd_alias      (char *name, ArgList *arglist, char *stuff,
 	int stub);
-static	Alias *	find_cmd_alias	    (char *);
 static	void	delete_variable   (char *name, int noisy);
 static	void	delete_cmd_alias   (char *name, int noisy);
 /*	void	delete_local_var (char *name); 		*/
@@ -227,6 +226,8 @@ extern	char ** get_subarray_elements   (char *root, int *howmany, int type);
 
 
 static	char *	get_variable_with_args (const char *str, const char *args, int *args_flag);
+
+static	void	prepare_alias_call (ArgList *, char **);
 
 /* I'm afraid this needed to be moved here, because some commands need to
  * know about the call stack and wind_index at this point. :/ */
@@ -779,9 +780,13 @@ void	destroy_arglist (ArgList *arglist)
 
 #define ew_next_arg(a,b,c,d) ((d) ? new_next_arg_count((a),(b),(c)) : next_arg_count((a),(b),(c)))
 
-void	prepare_alias_call (void *al, char **stuff)
-{
-	ArgList *args = (ArgList *)al;
+/*
+ * This function is used to prepare the $* string before calling a user
+ * alias or function.  You should pass in the arglist from the Alias
+ * to this function, and also the $* value.  The second value may very
+ * well be modified.
+ */
+static void prepare_alias_call (ArgList *args, char **stuff) {
 	int	i;
 
 	if (!args)
@@ -1149,7 +1154,7 @@ static Alias *	find_variable (char *name, int local) {
 	return item;
 }
 
-static Alias *find_cmd_alias (char *name) {
+Alias *find_cmd_alias (char *name) {
     Alias * item = NULL;
     char *save = name;
     namespace_t *nsp;
@@ -1540,22 +1545,6 @@ char	*get_variable_with_args (const char *str, const char *args, int *args_flag)
 }
 
 /*
- * This function finds the alias with the given name and returns the actual
- * guts of the alias (if it is found) or NULL.  If args is non-NULL it
- * stores the address of the alias' arglist in it.
- */
-char *get_cmd_alias(char *name, void **args) {
-    Alias *item = find_cmd_alias(name);
-
-    if (item != NULL)  {
-	if (args != NULL)
-	    *args = (void *)item->arglist;
-	return item->stuff;
-    }
-    return NULL;
-}
-
-/*
  * This function will try to 'complete' a command alias with the given name.
  * It looks for all the aliases in the current namespace (should normally be
  * the root space, but...) with 'name' as the beginning component of their
@@ -1779,73 +1768,85 @@ char **	get_subarray_elements (char *root, int *howmany, int type)
 	return matches;
 }
 
+/*
+ * parse_line_with_return: Creates a local stack and executes parse_line
+ * inside it, then returns the result (as stored in FUNCTION_RETURN).
+ */
+char *parse_line_with_return (char *name, char *what, char *args) {
+    int	old_last_function_call_level = last_function_call_level;
+    char *result = NULL;
 
-/* XXX What is this doing here? */
-static char *	parse_line_alias_special (char *name, char *what, char *args, int d1, void *arglist, int function)
-{
-	int	old_window_display = window_display;
-	int	old_last_function_call_level = last_function_call_level;
-	char	*result = NULL;
+    make_local_stack(name);
+    last_function_call_level = wind_index;
+    add_local_var("FUNCTION_RETURN", empty_string, 0);
 
-	window_display = 0;
-	make_local_stack(name);
-	prepare_alias_call(arglist, &args);
-	if (function)
-	{
-		last_function_call_level = wind_index;
-		add_local_var("FUNCTION_RETURN", empty_string, 0);
-	}
-	window_display = old_window_display;
+    will_catch_return_exceptions++;
+    parse_line(NULL, what, args, 0);
+    will_catch_return_exceptions--;
+    return_exception = 0;
 
-	will_catch_return_exceptions++;
-	parse_line(NULL, what, args, d1);
-	will_catch_return_exceptions--;
-	return_exception = 0;
+    result = get_variable("FUNCTION_RETURN");
+    last_function_call_level = old_last_function_call_level;
 
-	if (function)
-	{
-		result = get_variable("FUNCTION_RETURN");
-		last_function_call_level = old_last_function_call_level;
-	}
-	destroy_local_stack();
-	return result;
-}
-
-char *	parse_line_with_return (char *name, char *what, char *args, int d1)
-{
-	return parse_line_alias_special(name, what, args, d1, NULL, 1);
+    destroy_local_stack();
+    return result;
 }
 
 /************************************************************************/
 /*
- * call_user_function: Executes a user alias (by way of parse_command.
- * The actual function ends up being routed through execute_alias (below)
- * and we just keep track of the retval and stuff.  I dont know that anyone
- * depends on command completion with functions, so we can save a lot of
- * CPU time by just calling execute_alias() directly.
+ * Call a user alias as a function.  This is very similar to call_user_alias
+ * below, except that we monitor our return value and send it back as well.
  */
 char 	*call_user_function	(char *alias_name, char *args)
 {
 	Alias *alias;
-	char 	*result = NULL;
+	int old_last_function_call_level = last_function_call_level;
+	char *result = NULL;
+	namespace_t *old_ns = namespaces.current;
 
-	if ((alias = find_cmd_alias(alias_name)) != NULL)
-	    result = parse_line_alias_special(alias_name, alias->stuff,
-		    args, 1, alias->arglist, 1);
-	else if (x_debug & DEBUG_UNKNOWN)
-	    yell("Function call to non-existant alias [%s]", alias_name);
+	if ((alias = find_cmd_alias(alias_name)) == NULL) {
+	    if (x_debug & DEBUG_UNKNOWN)
+		yell("Function call to non-existant alias [%s]", alias_name);
+	    return m_strdup(empty_string);
+	}
 
-	if (result == NULL)
-		result = m_strdup(empty_string);
+	make_local_stack(alias->name);
+	namespaces.current = alias->nspace;
 
-	return result;
+	prepare_alias_call(alias->arglist, &args);
+	last_function_call_level = wind_index;
+	add_local_var("FUNCTION_RETURN", empty_string, 0);
+
+	will_catch_return_exceptions++;
+	parse_line(NULL, alias->stuff, args, 1);
+	will_catch_return_exceptions--;
+	return_exception = 0;
+
+	result = get_variable("FUNCTION_RETURN");
+	last_function_call_level = old_last_function_call_level;
+	destroy_local_stack();
+
+	return (result == NULL ? m_strdup(empty_string) : result);
 }
 
-/* XXX Ugh. */
-void	call_user_alias	(char *alias_name, char *alias_stuff, char *args, void *arglist)
-{
-	parse_line_alias_special(alias_name, alias_stuff, args, 
-					1, arglist, 0);
+/*
+ * Call a user alias.  We handle setting the namespace gunk and all of that
+ * here.
+ */
+void	call_user_alias	(Alias *alias, char *args) {
+	namespace_t *old_ns = namespaces.current;
+
+	make_local_stack(alias->name);
+	namespaces.current = alias->nspace;
+
+	will_catch_return_exceptions++;
+	prepare_alias_call(alias->arglist, &args);
+	parse_line(NULL, alias->stuff, args, 1);
+	will_catch_return_exceptions--;
+	return_exception = 0;
+
+	namespaces.current = old_ns;
+	destroy_local_stack();
 }
 
 
