@@ -10,7 +10,6 @@
 #define __alias_h__
 
 #include "bsdqueue.h"
-#include "namespace.h"
 
 /*
  * XXXX - These need to go away
@@ -23,7 +22,7 @@
  * size of the alias item structure. */
 typedef struct AliasItemStru {
 	char	*name;			/* name of alias */
-	namespace_t *nspace;		/* namespace we live in */
+	struct namespace *nspace;		/* namespace we live in */
 	char	*stuff;			/* what the alias is */
 	char	*stub;			/* the file its stubbed to */
 	char	*filename;		/* file it was loaded from */
@@ -33,6 +32,7 @@ typedef struct AliasItemStru {
 	LIST_ENTRY(AliasItemStru) lp;
 }	Alias;
 
+LIST_HEAD(alias_list, AliasItemStru);
 
 /*
  * These are the user commands.  Dont call these directly.

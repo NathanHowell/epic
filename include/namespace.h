@@ -8,6 +8,7 @@
 #ifndef EPIC_NAMESPACE_H
 #define EPIC_NAMESPACE_H
 
+#include "alias.h"
 #include "hash.h"
 
 /* The namespace structure.  The core of a namespace is its name, and its
@@ -20,9 +21,9 @@ typedef struct namespace {
     LIST_HEAD(, namespace) children;		/* list of our children */
 
     hashtable_t *ftable;			/* function (alias) table */
-    LIST_HEAD(, AliasItemStru) flist;		/* and list */
+    struct alias_list flist;			/* and list */
     hashtable_t *vtable;			/* variable (assign) table */
-    LIST_HEAD(, AliasItemStru) vlist;		/* and list */
+    struct alias_list vlist;			/* and list */
 
     LIST_ENTRY(namespace) lp;
 } namespace_t;

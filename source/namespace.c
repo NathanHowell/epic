@@ -1,4 +1,4 @@
-/* $EPIC: namespace.c,v 1.1.2.2 2003/02/27 14:31:08 wd Exp $ */
+/* $EPIC: namespace.c,v 1.1.2.3 2003/02/27 15:14:18 wd Exp $ */
 /*
  * namespace.c: Namespace tracking system.
  *
@@ -32,7 +32,6 @@
  */
 
 #include "irc.h"
-#include "alias.h"
 #include "config.h"
 #include "commands.h"
 #include "ircaux.h"

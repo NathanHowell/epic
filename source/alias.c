@@ -1,4 +1,4 @@
-/* $EPIC: alias.c,v 1.11.2.3 2003/02/27 14:31:08 wd Exp $ */
+/* $EPIC: alias.c,v 1.11.2.4 2003/02/27 15:14:18 wd Exp $ */
 /*
  * alias.c -- Handles the whole kit and caboodle for aliases.
  *
@@ -36,7 +36,6 @@
 /* Almost totaly rewritten by Jeremy Nelson (01/97) */
 
 #include "irc.h"
-#include "alias.h"
 #include "array.h"
 #include "commands.h"
 #include "files.h"
@@ -207,7 +206,8 @@ static	void	unload_variable   (char *fn);
 static	void	list_cmd_alias     (char *name);
 static	void	list_variable     (char *name);
 static	void	list_local_var   (char *name);
-static	void 	destroy_aliases    (int type);
+static	void 	destroy_aliases    (hashtable_t *table,
+	struct alias_list *list);
 
 extern	char *  get_variable            (char *name);
 extern	char ** glob_cmd_alias          (char *name, int *howmany);
@@ -220,6 +220,34 @@ extern	char ** get_subarray_elements   (char *root, int *howmany, int type);
 
 
 static	char *	get_variable_with_args (const char *str, const char *args, int *args_flag);
+
+/* I'm afraid this needed to be moved here, because some commands need to
+ * know about the call stack and wind_index at this point. :/ */
+
+/*
+ * This is the ``stack frame''.  Each frame has a ``name'' which is
+ * the name of the alias or on of the frame, or is NULL if the frame
+ * is not an ``enclosing'' frame.  Each frame also has a ``current command''
+ * that is being executed, which is used to help us when the client crashes.
+ * Each stack also contains a list of local variables.
+ */
+typedef struct RuntimeStackStru
+{
+	const char *name;	/* Name of the stack */
+	char 	*current;	/* Current cmd being executed */
+	hashtable_t *vtable;	/* variable table */
+	struct alias_list vlist;/* and list */
+	int	locked;		/* Are we locked in a wait? */
+	int	parent;		/* Our parent stack frame */
+}	RuntimeStack;
+
+/*
+ * This is the master stack frame.  Its size is saved in ``max_wind''
+ * and the current frame being used is stored in ``wind_index''.
+ */
+static 	RuntimeStack *call_stack = NULL;
+	int 	max_wind = -1;
+	int 	wind_index = -1;
 
 /************************** HIGH LEVEL INTERFACE ***********************/
 
@@ -530,7 +558,8 @@ BUILT_IN_COMMAND(localcmd)
 
 	if (!my_strnicmp(name, "-dump", 2))	/* Illegal name anyways */
 	{
-		destroy_aliases(VAR_ALIAS_LOCAL);
+		destroy_aliases(call_stack[wind_index].vtable,
+			&call_stack[wind_index].vlist);
 		return;
 	}
 
@@ -567,13 +596,15 @@ BUILT_IN_COMMAND(dumpcmd)
 		if (!strncmp(blah, "VAR", strlen(blah)) || all)
 		{
 			say("Dumping your global variables");
-			destroy_aliases(VAR_ALIAS);
+			destroy_aliases(namespaces.root->vtable,
+				&namespaces.root->vlist);
 			dumped++;
 		}
 		if (!strncmp(blah, "ALIAS", strlen(blah)) || all)
 		{
 			say("Dumping your global aliases");
-			destroy_aliases(COMMAND_ALIAS);
+			destroy_aliases(namespaces.root->ftable,
+				&namespaces.root->flist);
 			dumped++;
 		}
 		if (!strncmp(blah, "ON", strlen(blah)) || all)
@@ -765,32 +796,6 @@ void	prepare_alias_call (void *al, char **stuff)
 static	namespace_t *extract_namespace(char **name);
 static	Alias *	find_variable     (char *name, int local);
 static	Alias *	find_cmd_alias     (char *name);
-
-/*
- * This is the ``stack frame''.  Each frame has a ``name'' which is
- * the name of the alias or on of the frame, or is NULL if the frame
- * is not an ``enclosing'' frame.  Each frame also has a ``current command''
- * that is being executed, which is used to help us when the client crashes.
- * Each stack also contains a list of local variables.
- */
-typedef struct RuntimeStackStru
-{
-	const char *name;	/* Name of the stack */
-	char 	*current;	/* Current cmd being executed */
-	hashtable_t *vtable;	/* variable table */
-	LIST_HEAD(, AliasItemStru) vlist; /* and list */
-	int	locked;		/* Are we locked in a wait? */
-	int	parent;		/* Our parent stack frame */
-}	RuntimeStack;
-
-/*
- * This is the master stack frame.  Its size is saved in ``max_wind''
- * and the current frame being used is stored in ``wind_index''.
- */
-static 	RuntimeStack *call_stack = NULL;
-	int 	max_wind = -1;
-	int 	wind_index = -1;
-
 static	Alias *	find_local_var   (char *name, RuntimeStack **frame);
 
 /* this function extracts the namespace portion from a string.  it returns
@@ -1799,33 +1804,17 @@ void 	save_aliases (FILE *fp, int do_all)
 }
 
 static
-void 	destroy_aliases (int type)
-{
-#if 0
-	int cnt = 0;
-	hashtable_t *table = NULL;
+void 	destroy_aliases (hashtable_t *table, struct alias_list *list) {
+	Alias *ap;
 
-	if (type == COMMAND_ALIAS)
-		table = namespaces.root->ftable;
-	else if (type == VAR_ALIAS)
-		table = namespaces.root->vtable;
-	else if (type == VAR_ALIAS_LOCAL)
-		table = &call_stack[wind_index].table;
-
-	for (cnt = 0; cnt < my_array->max; cnt++)
-	{
-		new_free((void **)&(my_array->list[cnt]->stuff));
-		new_free((void **)&(my_array->list[cnt]->name));
-		new_free((void **)&(my_array->list[cnt]->stub));
-		new_free((void **)&(my_array->list[cnt]->filename));
-		new_free((void **)&(my_array->list[cnt]));	/* XXX Hrm. */
+	while ((ap = LIST_FIRST(list)) != NULL) {
+	    hash_delete(table, ap);
+	    LIST_REMOVE(ap, lp);
+	    new_free(&ap->stuff);
+	    new_free(&ap->stub);
+	    new_free(&ap->filename);
+	    new_free(&ap);
 	}
-	for (cnt = 0; cnt < my_array->cache_size; cnt++)
-		my_array->cache[cnt] = NULL;
-
-	new_free((void **)&(my_array->list));
-	my_array->max = my_array->max_alloc = 0;
-#endif
 }
 
 /******************* RUNTIME STACK SUPPORT **********************************/
@@ -1867,6 +1856,7 @@ void 	make_local_stack 	(const char *name)
 	call_stack[wind_index].vtable = create_hash_table(4,
 		sizeof(Alias), NAMESPACE_HASH_SANITYLEN,
 		HASH_FL_NOCASE | HASH_FL_STRING, strcasecmp);
+	LIST_INIT(&call_stack[wind_index].vlist);
 	call_stack[wind_index].locked = 0;
 }
 
@@ -1892,9 +1882,11 @@ void 	destroy_local_stack 	(void)
 	 * We clean up as best we can here...
 	 */
 	if (call_stack[wind_index].vtable != NULL) {
-	    destroy_aliases(VAR_ALIAS_LOCAL);
+	    destroy_aliases(call_stack[wind_index].vtable,
+		    &call_stack[wind_index].vlist);
 	    destroy_hash_table(call_stack[wind_index].vtable);
 	    call_stack[wind_index].vtable = NULL;
+	    LIST_INIT(&call_stack[wind_index].vlist);
 	}
 	if (call_stack[wind_index].current)
 		call_stack[wind_index].current = 0;
